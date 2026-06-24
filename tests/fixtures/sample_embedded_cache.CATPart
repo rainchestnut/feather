@@ -1,0 +1,16 @@
+CATPart-private-container-prefix
+FEATHER_CAD_LITE_CACHE_V1
+material Default 0.76 0.78 0.82 1.0
+mesh SamplePlate
+primitive 0
+v 0 0 0
+v 2 0 0
+v 2 1 0
+v 0 1 0
+tri 0 1 2
+tri 0 2 3
+endprimitive
+endmesh
+node SamplePlate 0 root
+END_FEATHER_CAD_LITE_CACHE
+CATPart-private-container-suffix

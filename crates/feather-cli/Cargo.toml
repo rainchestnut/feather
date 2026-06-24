@@ -1,0 +1,16 @@
+[package]
+name = "feather-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "feather"
+path = "src/main.rs"
+
+[dependencies]
+feather-lite = { path = "../feather-lite" }
+
+[dev-dependencies]
+miniz_oxide = "0.8.9"
+serde_json = "1.0"
