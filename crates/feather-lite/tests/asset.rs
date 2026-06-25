@@ -5,8 +5,9 @@ use feather_lite::{
     ASSET_PACKAGE_CONTRACT_VERSION, AssetConversionError, AssetConversionProfile,
     AssetConversionRequest, AssetPackageFreshnessReason, AssetPackageStatus,
     AssetPreflightDecision, AssetPreflightRequest, AssetPreviewStatus, AssetQualityLevel,
-    BatchAssetConversionRequest, BatchItemStatus, convert_asset, convert_batch_assets,
-    ensure_asset_package, ensure_batch_asset_package, explain_asset_package_freshness,
+    BatchAssetConversionRequest, BatchItemStatus, JobConversionSettings, asset_conversion_identity,
+    batch_asset_conversion_identity, convert_asset, convert_batch_assets, ensure_asset_package,
+    ensure_batch_asset_package, explain_asset_package_freshness,
     explain_batch_asset_package_freshness, is_asset_package_current,
     is_batch_asset_package_current, preflight_asset,
 };
@@ -133,6 +134,51 @@ fn convert_asset_writes_standard_business_package() {
     )
     .expect("fixture should be changed");
     assert!(!is_asset_package_current(&request).expect("freshness check should run"));
+
+    fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
+}
+
+#[test]
+fn asset_conversion_identity_matches_conversion_and_effective_settings() {
+    let temp_dir = unique_temp_dir("asset-identity-single");
+    fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+    let input_path = temp_dir.join("fixture.CATPart");
+    let output_dir = temp_dir.join("asset");
+    fs::write(
+        &input_path,
+        format!("CATPart private payload prefix\n{SAMPLE_CACHE}\nprivate suffix"),
+    )
+    .expect("fixture should be written");
+
+    let request = AssetConversionRequest::new(&input_path, &output_dir);
+    let planned = asset_conversion_identity(&request).expect("identity should be computable");
+    let repeated = asset_conversion_identity(&request).expect("identity should be stable");
+    assert_eq!(planned, repeated);
+
+    let converted = convert_asset(&request).expect("asset conversion should succeed");
+    assert_eq!(planned.asset_id, converted.asset_id);
+    assert_eq!(planned.source_sha256, converted.source_sha256);
+    assert_eq!(planned.source_size_bytes, converted.source_size_bytes);
+    assert_eq!(planned.settings_fingerprint, converted.settings_fingerprint);
+
+    let custom_settings = JobConversionSettings {
+        write_metadata: false,
+        max_triangles: Some(42),
+        ..JobConversionSettings::default()
+    };
+    let mut metadata_disabled = request.clone();
+    metadata_disabled.profile = AssetConversionProfile::Custom(custom_settings.clone());
+    let mut metadata_enabled = request.clone();
+    metadata_enabled.profile = AssetConversionProfile::Custom(JobConversionSettings {
+        write_metadata: true,
+        ..custom_settings
+    });
+    assert_eq!(
+        asset_conversion_identity(&metadata_disabled)
+            .expect("custom identity should be computable"),
+        asset_conversion_identity(&metadata_enabled)
+            .expect("custom identity should normalize effective settings")
+    );
 
     fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
 }
@@ -562,6 +608,54 @@ fn convert_batch_assets_expands_directory_inputs_for_package_identity() {
             .expect("source size should be an integer"),
         result.source_size_bytes
     );
+
+    fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
+}
+
+#[test]
+fn batch_asset_conversion_identity_matches_conversion_and_mode() {
+    let temp_dir = unique_temp_dir("asset-identity-batch");
+    let source_dir = temp_dir.join("incoming");
+    fs::create_dir_all(&source_dir).expect("source dir should be created");
+    let input_b = source_dir.join("b.CATPart");
+    let input_a = source_dir.join("a.CATPart");
+    let output_dir = source_dir.join("batch-asset");
+    fs::write(
+        &input_b,
+        format!("CATPart private payload B\n{SAMPLE_CACHE}\nprivate suffix"),
+    )
+    .expect("fixture B should be written");
+    fs::write(
+        &input_a,
+        format!("CATPart private payload A\n{SAMPLE_CACHE}\nprivate suffix"),
+    )
+    .expect("fixture A should be written");
+
+    let request = BatchAssetConversionRequest::new(vec![source_dir.clone()], &output_dir);
+    assert!(!output_dir.exists());
+    let planned = batch_asset_conversion_identity(&request).expect("identity should be computable");
+
+    let converted = convert_batch_assets(&request).expect("batch conversion should succeed");
+    assert_eq!(planned.asset_id, converted.asset_id);
+    assert_eq!(planned.source_sha256, converted.source_sha256);
+    assert_eq!(planned.source_size_bytes, converted.source_size_bytes);
+    assert_eq!(planned.settings_fingerprint, converted.settings_fingerprint);
+
+    let repeated =
+        batch_asset_conversion_identity(&request).expect("identity should remain stable");
+    assert_eq!(planned, repeated);
+
+    let mut check_request = request.clone();
+    check_request.check_only = true;
+    let check_only =
+        batch_asset_conversion_identity(&check_request).expect("check identity should compute");
+    assert_eq!(check_only.source_sha256, planned.source_sha256);
+    assert_eq!(check_only.source_size_bytes, planned.source_size_bytes);
+    assert_ne!(
+        check_only.settings_fingerprint,
+        planned.settings_fingerprint
+    );
+    assert_ne!(check_only.asset_id, planned.asset_id);
 
     fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
 }

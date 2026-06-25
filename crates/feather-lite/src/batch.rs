@@ -476,8 +476,11 @@ pub fn collect_batch_input_paths(
     inputs: &[PathBuf],
     output_dir: &Path,
 ) -> Result<Vec<PathBuf>, BatchInputCollectionError> {
-    let output_dir =
-        fs::canonicalize(output_dir).map_err(BatchInputCollectionError::ResolveOutputDir)?;
+    let output_dir = if output_dir.exists() {
+        Some(fs::canonicalize(output_dir).map_err(BatchInputCollectionError::ResolveOutputDir)?)
+    } else {
+        None
+    };
     let mut files = Vec::new();
 
     for input in inputs {
@@ -486,7 +489,7 @@ pub fn collect_batch_input_paths(
             continue;
         }
         if input.is_dir() {
-            collect_batch_directory(input, &output_dir, &mut files)?;
+            collect_batch_directory(input, output_dir.as_deref(), &mut files)?;
             continue;
         }
         return Err(BatchInputCollectionError::MissingInput(input.clone()));
@@ -769,7 +772,7 @@ fn elapsed_millis(started_at: Instant) -> u128 {
 
 fn collect_batch_directory(
     directory: &Path,
-    output_dir: &Path,
+    output_dir: Option<&Path>,
     files: &mut Vec<PathBuf>,
 ) -> Result<(), BatchInputCollectionError> {
     let mut entries = fs::read_dir(directory)
@@ -786,7 +789,10 @@ fn collect_batch_directory(
 
     for entry in entries {
         let path = entry.path();
-        if path_is_inside_directory(&path, output_dir) {
+        if output_dir
+            .map(|output_dir| path_is_inside_directory(&path, output_dir))
+            .unwrap_or(false)
+        {
             continue;
         }
         if path.is_dir() {

@@ -493,30 +493,45 @@ impl Error for AssetConversionError {
     }
 }
 
+/// Computes the stable identity for a single-source conversion request.
+///
+/// This reads the source bytes and resolves the effective conversion settings,
+/// but it does not write package artifacts or run mesh export.
+pub fn asset_conversion_identity(
+    request: &AssetConversionRequest,
+) -> Result<AssetIdentity, AssetConversionError> {
+    Ok(prepare_single_asset_identity(request)?.identity)
+}
+
+/// Computes the stable identity for a batch conversion request.
+///
+/// Directory inputs are expanded with the same deterministic ordering and
+/// output-directory exclusion rules used by batch conversion.
+pub fn batch_asset_conversion_identity(
+    request: &BatchAssetConversionRequest,
+) -> Result<AssetIdentity, AssetConversionError> {
+    let package = batch_asset_package(&request.output_dir);
+    let input_paths = collect_batch_input_paths(&request.input_paths, &package.root_dir)
+        .map_err(|error| batch_collect_error(package.clone(), error))?;
+    if input_paths.is_empty() {
+        return Err(empty_batch_error(package));
+    }
+
+    Ok(prepare_batch_asset_identity_from_paths(request, input_paths)?.identity)
+}
+
 /// Converts one source into a standard business artifact package.
 pub fn convert_asset(
     request: &AssetConversionRequest,
 ) -> Result<AssetConversionResult, AssetConversionError> {
     let package = single_asset_package(&request.output_dir);
     ensure_dir(&package.root_dir)?;
-    let settings = settings_for_asset_request(
-        &request.profile,
-        &request.resolve_dirs,
-        &request.reference_path_mappings,
-        request.limits,
-    );
-    let source = source_identity(&request.input_path)?;
-    let identity = identity_from_parts(
-        std::slice::from_ref(&source),
-        request.profile.label(),
-        &settings,
-        None,
-    );
+    let prepared = prepare_single_asset_identity(request)?;
     write_source_info(
         &package,
         request.profile.label(),
-        std::slice::from_ref(&source),
-        &identity,
+        std::slice::from_ref(&prepared.source),
+        &prepared.identity,
         "conversion",
     )?;
 
@@ -528,16 +543,19 @@ pub fn convert_asset(
     match convert_path_to_glb(
         &request.input_path,
         model_path,
-        &settings.to_conversion_options(metadata_path),
+        &prepared.settings.to_conversion_options(metadata_path),
     ) {
         Ok(summary) => {
-            let result =
-                AssetConversionResult::from_summary(package.clone(), identity.clone(), summary);
+            let result = AssetConversionResult::from_summary(
+                package.clone(),
+                prepared.identity.clone(),
+                summary,
+            );
             write_diagnostics(
                 &package,
                 request.profile.label(),
                 "succeeded",
-                &identity,
+                &prepared.identity,
                 Some(&result),
                 None,
             )?;
@@ -549,7 +567,7 @@ pub fn convert_asset(
                 &package,
                 request.profile.label(),
                 "failed",
-                &identity,
+                &prepared.identity,
                 None,
                 Some(&failure),
             );
@@ -576,47 +594,35 @@ pub fn convert_batch_assets(
         .manifest_path
         .clone()
         .expect("batch asset package reserves manifest path");
-    let settings = settings_for_asset_request(
-        &request.profile,
-        &request.resolve_dirs,
-        &request.reference_path_mappings,
-        request.limits,
-    );
     let input_paths = collect_batch_inputs_or_write_failure(
         request,
         &package,
-        &batch_output_dir,
+        &package.root_dir,
         request.profile.label(),
     )?;
-    let input_identities = source_identities(&input_paths)?;
-    let identity = batch_identity_from_parts(
-        &input_identities,
-        request.profile.label(),
-        &settings,
-        request.check_only,
-    );
+    let prepared = prepare_batch_asset_identity_from_paths(request, input_paths)?;
     write_source_info(
         &package,
         request.profile.label(),
-        &input_identities,
-        &identity,
+        &prepared.sources,
+        &prepared.identity,
         "batch_conversion",
     )?;
 
     let run = run_batch_conversion(
-        &input_paths,
+        &prepared.input_paths,
         &BatchConversionOptions {
             output_dir: batch_output_dir,
             manifest_path: Some(manifest_path),
             check_only: request.check_only,
-            conversion: settings.to_conversion_options(None),
+            conversion: prepared.settings.to_conversion_options(None),
         },
     );
     match run {
         Ok(report) => batch_asset_result_from_report(
             &package,
             request.profile.label(),
-            identity,
+            prepared.identity,
             report.report,
         ),
         Err(error) => {
@@ -625,7 +631,7 @@ pub fn convert_batch_assets(
                 &package,
                 request.profile.label(),
                 "failed",
-                Some(&identity),
+                Some(&prepared.identity),
                 &failure,
             );
             Err(AssetConversionError::BatchFailed {
@@ -650,25 +656,13 @@ fn convert_batch_assets_incremental(
         .manifest_path
         .clone()
         .expect("batch asset package reserves manifest path");
-    let settings = settings_for_asset_request(
-        &request.profile,
-        &request.resolve_dirs,
-        &request.reference_path_mappings,
-        request.limits,
-    );
     let input_paths = collect_batch_inputs_or_write_failure(
         request,
         &package,
-        &batch_output_dir,
+        &package.root_dir,
         request.profile.label(),
     )?;
-    let input_identities = source_identities(&input_paths)?;
-    let identity = batch_identity_from_parts(
-        &input_identities,
-        request.profile.label(),
-        &settings,
-        request.check_only,
-    );
+    let prepared = prepare_batch_asset_identity_from_paths(request, input_paths)?;
     let reusable_items = if request.check_only {
         BTreeMap::new()
     } else {
@@ -677,17 +671,17 @@ fn convert_batch_assets_incremental(
     write_source_info(
         &package,
         request.profile.label(),
-        &input_identities,
-        &identity,
+        &prepared.sources,
+        &prepared.identity,
         "batch_conversion",
     )?;
 
     let report = run_incremental_batch_items(
-        &input_paths,
-        &input_identities,
+        &prepared.input_paths,
+        &prepared.sources,
         &batch_output_dir,
         &manifest_path,
-        &settings,
+        &prepared.settings,
         request.check_only,
         &reusable_items,
     )
@@ -697,7 +691,7 @@ fn convert_batch_assets_incremental(
             &package,
             request.profile.label(),
             "failed",
-            Some(&identity),
+            Some(&prepared.identity),
             &failure,
         );
         AssetConversionError::BatchFailed {
@@ -706,7 +700,7 @@ fn convert_batch_assets_incremental(
         }
     })?;
 
-    batch_asset_result_from_report(&package, request.profile.label(), identity, report)
+    batch_asset_result_from_report(&package, request.profile.label(), prepared.identity, report)
 }
 
 fn batch_asset_result_from_report(
@@ -914,27 +908,15 @@ fn inspect_current_asset_package(
         return Ok(stale_asset(AssetPackageFreshnessReason::MissingMetadata));
     }
 
-    let settings = settings_for_asset_request(
-        &request.profile,
-        &request.resolve_dirs,
-        &request.reference_path_mappings,
-        request.limits,
-    );
-    let source = source_identity(&request.input_path)?;
-    let identity = identity_from_parts(
-        std::slice::from_ref(&source),
-        request.profile.label(),
-        &settings,
-        None,
-    );
+    let prepared = prepare_single_asset_identity(request)?;
     let source_info: AssetSourceInfoJson = read_json(&package.source_info_path)?;
     let diagnostics: AssetDiagnosticsJson = read_json(&package.diagnostics_path)?;
 
     if let Some(reason) = single_asset_metadata_mismatch_reason(
         &source_info,
         &diagnostics,
-        &source,
-        &identity,
+        &prepared.source,
+        &prepared.identity,
         request.profile.label(),
     ) {
         return Ok(stale_asset(reason));
@@ -969,7 +951,7 @@ fn inspect_current_asset_package(
         .as_ref()
         .expect("single asset package reserves metadata path");
     let quality = single_quality_report(SingleQualityInput {
-        input_size_bytes: identity.source_size_bytes,
+        input_size_bytes: prepared.identity.source_size_bytes,
         node_count,
         mesh_count,
         primitive_count,
@@ -983,10 +965,10 @@ fn inspect_current_asset_package(
         AssetPackageFreshness::current(),
         Some(AssetConversionResult {
             package,
-            asset_id: identity.asset_id,
-            source_sha256: identity.source_sha256,
-            source_size_bytes: identity.source_size_bytes,
-            settings_fingerprint: identity.settings_fingerprint,
+            asset_id: prepared.identity.asset_id,
+            source_sha256: prepared.identity.source_sha256,
+            source_size_bytes: prepared.identity.source_size_bytes,
+            settings_fingerprint: prepared.identity.settings_fingerprint,
             quality,
             source_format,
             node_count,
@@ -1025,32 +1007,20 @@ fn inspect_current_batch_asset_package(
         ));
     }
 
-    let settings = settings_for_asset_request(
-        &request.profile,
-        &request.resolve_dirs,
-        &request.reference_path_mappings,
-        request.limits,
-    );
-    let input_paths = collect_batch_input_paths(&request.input_paths, batch_output_dir)
+    let input_paths = collect_batch_input_paths(&request.input_paths, &package.root_dir)
         .map_err(|error| batch_collect_error(package.clone(), error))?;
     if input_paths.is_empty() {
         return Ok(stale_batch(AssetPackageFreshnessReason::EmptyBatchInputSet));
     }
 
-    let sources = source_identities(&input_paths)?;
-    let identity = batch_identity_from_parts(
-        &sources,
-        request.profile.label(),
-        &settings,
-        request.check_only,
-    );
+    let prepared = prepare_batch_asset_identity_from_paths(request, input_paths)?;
     let source_info: AssetSourceInfoJson = read_json(&package.source_info_path)?;
     let diagnostics: BatchAssetDiagnosticsJson = read_json(&package.diagnostics_path)?;
     if let Some(reason) = batch_asset_metadata_mismatch_reason(
         &source_info,
         &diagnostics,
-        &sources,
-        &identity,
+        &prepared.sources,
+        &prepared.identity,
         request.profile.label(),
     ) {
         return Ok(stale_batch(reason));
@@ -1059,7 +1029,9 @@ fn inspect_current_batch_asset_package(
     let Some(report) = read_batch_report(manifest_path)? else {
         return Ok(stale_batch(AssetPackageFreshnessReason::ManifestMismatch));
     };
-    if let Some(reason) = batch_report_mismatch_reason(&report, request.check_only, &settings) {
+    if let Some(reason) =
+        batch_report_mismatch_reason(&report, request.check_only, &prepared.settings)
+    {
         return Ok(stale_batch(reason));
     }
     if diagnostics.input_count != report.input_count()
@@ -1077,10 +1049,10 @@ fn inspect_current_batch_asset_package(
         AssetPackageFreshness::current(),
         Some(BatchAssetConversionResult {
             package,
-            asset_id: identity.asset_id,
-            source_sha256: identity.source_sha256,
-            source_size_bytes: identity.source_size_bytes,
-            settings_fingerprint: identity.settings_fingerprint,
+            asset_id: prepared.identity.asset_id,
+            source_sha256: prepared.identity.source_sha256,
+            source_size_bytes: prepared.identity.source_size_bytes,
+            settings_fingerprint: prepared.identity.settings_fingerprint,
             quality: batch_quality_report(&report),
             report,
         }),
@@ -1504,10 +1476,10 @@ fn preflight_quality_report(
 fn collect_batch_inputs_or_write_failure(
     request: &BatchAssetConversionRequest,
     package: &AssetOutputPackage,
-    batch_output_dir: &Path,
+    excluded_package_dir: &Path,
     profile: &str,
 ) -> Result<Vec<PathBuf>, AssetConversionError> {
-    match collect_batch_input_paths(&request.input_paths, batch_output_dir) {
+    match collect_batch_input_paths(&request.input_paths, excluded_package_dir) {
         Ok(paths) if !paths.is_empty() => Ok(paths),
         Ok(_) => {
             let error = BatchConversionError::EmptyInputSet;
@@ -1536,6 +1508,14 @@ fn batch_collect_error(
 ) -> AssetConversionError {
     let error = BatchConversionError::CollectInputs(error);
     let failure = AssetFailure::from_batch_error(&error);
+    AssetConversionError::BatchFailed {
+        package: Box::new(package),
+        failure: Box::new(failure),
+    }
+}
+
+fn empty_batch_error(package: AssetOutputPackage) -> AssetConversionError {
+    let failure = AssetFailure::from_batch_error(&BatchConversionError::EmptyInputSet);
     AssetConversionError::BatchFailed {
         package: Box::new(package),
         failure: Box::new(failure),
@@ -1782,6 +1762,71 @@ struct SourceIdentity {
     path: PathBuf,
     source_sha256: String,
     source_size_bytes: u64,
+}
+
+#[derive(Debug, Clone)]
+struct PreparedSingleAssetIdentity {
+    settings: JobConversionSettings,
+    source: SourceIdentity,
+    identity: AssetIdentity,
+}
+
+#[derive(Debug, Clone)]
+struct PreparedBatchAssetIdentity {
+    settings: JobConversionSettings,
+    input_paths: Vec<PathBuf>,
+    sources: Vec<SourceIdentity>,
+    identity: AssetIdentity,
+}
+
+fn prepare_single_asset_identity(
+    request: &AssetConversionRequest,
+) -> Result<PreparedSingleAssetIdentity, AssetConversionError> {
+    let settings = settings_for_asset_request(
+        &request.profile,
+        &request.resolve_dirs,
+        &request.reference_path_mappings,
+        request.limits,
+    );
+    let source = source_identity(&request.input_path)?;
+    let identity = identity_from_parts(
+        std::slice::from_ref(&source),
+        request.profile.label(),
+        &settings,
+        None,
+    );
+
+    Ok(PreparedSingleAssetIdentity {
+        settings,
+        source,
+        identity,
+    })
+}
+
+fn prepare_batch_asset_identity_from_paths(
+    request: &BatchAssetConversionRequest,
+    input_paths: Vec<PathBuf>,
+) -> Result<PreparedBatchAssetIdentity, AssetConversionError> {
+    let settings = settings_for_asset_request(
+        &request.profile,
+        &request.resolve_dirs,
+        &request.reference_path_mappings,
+        request.limits,
+    );
+    let sources = source_identities(&input_paths)?;
+    let identity = batch_identity_from_parts(
+        &sources,
+        request.profile.label(),
+        &settings,
+        request.check_only,
+    );
+
+    Ok(PreparedBatchAssetIdentity {
+        settings,
+        input_paths,
+        sources,
+        identity,
+    })
 }
 
 fn identity_from_parts(

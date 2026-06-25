@@ -157,7 +157,8 @@ use std::path::{Path, PathBuf};
 use feather_lite::{
     AssetConversionProfile, AssetConversionRequest, BatchAssetConversionRequest,
     BatchConversionOptions, ConversionOptions, InspectOptions, JobConversionSettings,
-    LocalJobStore, ReferencePathMapping, convert_path_to_glb, ensure_asset_package,
+    LocalJobStore, ReferencePathMapping, asset_conversion_identity,
+    batch_asset_conversion_identity, convert_path_to_glb, ensure_asset_package,
     ensure_batch_asset_package, explain_asset_package_freshness,
     explain_batch_asset_package_freshness, inspect_path, is_asset_package_current,
     is_batch_asset_package_current, run_batch_conversion,
@@ -192,6 +193,8 @@ let mut asset_request = AssetConversionRequest::new(
     PathBuf::from("./asset-package"),
 );
 asset_request.profile = AssetConversionProfile::StandardReview;
+let planned_asset = asset_conversion_identity(&asset_request)?;
+println!("{}", planned_asset.asset_id);
 let asset = ensure_asset_package(&asset_request)?;
 println!("{}", asset.status.as_str());
 println!(
@@ -213,6 +216,8 @@ let batch_asset_request = BatchAssetConversionRequest::new(
     vec![PathBuf::from("./incoming-cad")],
     PathBuf::from("./batch-asset-package"),
 );
+let planned_batch_asset = batch_asset_conversion_identity(&batch_asset_request)?;
+println!("{}", planned_batch_asset.settings_fingerprint);
 let batch_asset = ensure_batch_asset_package(&batch_asset_request)?;
 println!("{}", batch_asset.status.as_str());
 println!("{}", is_batch_asset_package_current(&batch_asset_request)?);
@@ -251,6 +256,10 @@ The main embeddable operations are:
   sizes. `preflight_asset` performs a real import check without writing
   artifacts and returns a stable `AssetPreflightDecision`, optional
   `required_condition`, geometry counts, and preflight quality.
+- `asset_conversion_identity` and `batch_asset_conversion_identity`: compute the
+  same stable `asset_id`, source hash, source byte size, and settings
+  fingerprint that conversion and reuse checks will use, without running mesh
+  export.
 - `is_asset_package_current`, `is_batch_asset_package_current`,
   `explain_asset_package_freshness`, and
   `explain_batch_asset_package_freshness`: validate that business asset
