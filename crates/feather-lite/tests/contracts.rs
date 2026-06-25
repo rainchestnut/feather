@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
 use feather_lite::{
-    BATCH_MANIFEST_CONTRACT_VERSION, BatchReport, CACHE_DUMP_MANIFEST_CONTRACT_VERSION,
-    CacheDumpReport, DumpedVisualAsset, FORMAT_CAPABILITIES_CONTRACT_VERSION,
-    INSPECT_REPORT_CONTRACT_VERSION, InspectOptions, JOB_RECORD_CONTRACT_VERSION,
-    format_capabilities_json, inspect_bytes,
+    ASSET_PACKAGE_CONTRACT_VERSION, BATCH_MANIFEST_CONTRACT_VERSION, BatchReport,
+    CACHE_DUMP_MANIFEST_CONTRACT_VERSION, CacheDumpReport, DumpedVisualAsset,
+    FORMAT_CAPABILITIES_CONTRACT_VERSION, INSPECT_REPORT_CONTRACT_VERSION, InspectOptions,
+    JOB_RECORD_CONTRACT_VERSION, format_capabilities_json, inspect_bytes,
 };
 
 const SAMPLE_CACHE: &str = "\
@@ -35,6 +35,7 @@ fn exported_contract_versions_match_documented_v1_identifiers() {
         "feather.cache-dump-manifest.v1"
     );
     assert_eq!(JOB_RECORD_CONTRACT_VERSION, "feather.job-record.v1");
+    assert_eq!(ASSET_PACKAGE_CONTRACT_VERSION, "feather.asset-package.v1");
 }
 
 #[test]

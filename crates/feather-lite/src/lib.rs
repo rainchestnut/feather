@@ -27,6 +27,7 @@
 //! ```
 
 mod assembly;
+mod asset;
 mod assets;
 mod atomic_write;
 mod batch;
@@ -47,6 +48,12 @@ mod probe;
 
 mod json;
 
+pub use asset::{
+    AssetConversionError, AssetConversionProfile, AssetConversionRequest, AssetConversionResult,
+    AssetFailure, AssetOutputPackage, AssetPreflightRequest, AssetPreflightResult,
+    BatchAssetConversionRequest, BatchAssetConversionResult, convert_asset, convert_batch_assets,
+    preflight_asset,
+};
 pub use assets::embedded::{
     EmbeddedVisualAsset, EmbeddedVisualAssetKind, EmbeddedVisualAssetSource,
     discover_embedded_visual_assets, discover_embedded_visual_assets_with_limits,
@@ -68,9 +75,9 @@ pub use capabilities::{
     FormatCapability, format_capabilities, format_capabilities_json, format_capability,
 };
 pub use contracts::{
-    BATCH_MANIFEST_CONTRACT_VERSION, CACHE_DUMP_MANIFEST_CONTRACT_VERSION,
-    FORMAT_CAPABILITIES_CONTRACT_VERSION, INSPECT_REPORT_CONTRACT_VERSION,
-    JOB_RECORD_CONTRACT_VERSION,
+    ASSET_PACKAGE_CONTRACT_VERSION, BATCH_MANIFEST_CONTRACT_VERSION,
+    CACHE_DUMP_MANIFEST_CONTRACT_VERSION, FORMAT_CAPABILITIES_CONTRACT_VERSION,
+    INSPECT_REPORT_CONTRACT_VERSION, JOB_RECORD_CONTRACT_VERSION,
 };
 pub use diagnostics::batch_failure_category;
 pub use document::{

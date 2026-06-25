@@ -232,3 +232,42 @@ When present, `result.kind` is either:
   node, mesh, primitive, vertex, and triangle counts
 - `batch`: includes manifest path plus input, converted, checked, and failed
   counts
+
+## `feather.asset-package.v1`
+
+Emitted by:
+
+- `convert_asset`
+- `convert_batch_assets`
+
+Required fields in `source-info.json`:
+
+- `contract_version`: always `feather.asset-package.v1`
+- `kind`: `conversion` or `batch_conversion`
+- `profile`: profile label such as `mobile_preview`, `web_preview`,
+  `standard_review`, `high_quality`, or `custom`
+- `inputs`: array of source path and optional file size objects
+- `created_at_unix_ms`: integer
+
+Required fields in single conversion `diagnostics.json`:
+
+- `contract_version`: always `feather.asset-package.v1`
+- `status`: `succeeded` or `failed`
+- `profile`: profile label
+- `source_format`: converted format label or `null`
+- `node_count`, `mesh_count`, `primitive_count`, `vertex_count`,
+  `triangle_count`: quality counts or `null`
+- `failure`: failure object or `null`
+- `updated_at_unix_ms`: integer
+
+Required fields in batch `diagnostics.json`:
+
+- `contract_version`: always `feather.asset-package.v1`
+- `status`: `succeeded` or `failed`
+- `profile`: profile label
+- `input_count`, `converted_count`, `checked_count`, `failed_count`: integers
+- `failure`: failure object or `null`
+- `updated_at_unix_ms`: integer
+
+When present, `failure` includes stable `stage`, `category`, `message`, and
+`retryable` fields.

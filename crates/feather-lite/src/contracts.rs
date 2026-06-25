@@ -17,3 +17,6 @@ pub const CACHE_DUMP_MANIFEST_CONTRACT_VERSION: &str = "feather.cache-dump-manif
 
 /// Contract version emitted by local conversion job records.
 pub const JOB_RECORD_CONTRACT_VERSION: &str = "feather.job-record.v1";
+
+/// Contract version emitted by business asset package metadata and diagnostics.
+pub const ASSET_PACKAGE_CONTRACT_VERSION: &str = "feather.asset-package.v1";

@@ -9,7 +9,8 @@ The workspace contains two deliverables:
 
 - `crates/feather-lite`: the reusable core library. It owns probing, import,
   lightweight IR validation, mesh preparation, GLB export, inspect reports,
-  batch manifests, local conversion job records, and embedded cache dumping.
+  business asset packages, batch manifests, local conversion job records, and
+  embedded cache dumping.
 - `crates/feather-cli`: the `feather` executable. It is intentionally a thin
   command-line shell around `feather-lite`, responsible for argument parsing,
   status output, and process exit codes.
@@ -154,8 +155,10 @@ integration surface for production code.
 use std::path::{Path, PathBuf};
 
 use feather_lite::{
-    BatchConversionOptions, ConversionOptions, InspectOptions, JobConversionSettings,
-    LocalJobStore, ReferencePathMapping, convert_path_to_glb, inspect_path, run_batch_conversion,
+    AssetConversionProfile, AssetConversionRequest, BatchConversionOptions,
+    ConversionOptions, InspectOptions, JobConversionSettings, LocalJobStore,
+    ReferencePathMapping, convert_asset, convert_path_to_glb, inspect_path,
+    run_batch_conversion,
 };
 
 let inspect = inspect_path(
@@ -182,6 +185,14 @@ let summary = convert_path_to_glb(
 )?;
 println!("{} triangles", summary.triangle_count);
 
+let mut asset_request = AssetConversionRequest::new(
+    PathBuf::from("assembly.CATProduct"),
+    PathBuf::from("./asset-package"),
+);
+asset_request.profile = AssetConversionProfile::StandardReview;
+let asset = convert_asset(&asset_request)?;
+println!("{}", asset.package.model_path.unwrap().display());
+
 let batch = run_batch_conversion(
     &[PathBuf::from("./incoming-cad")],
     &BatchConversionOptions {
@@ -204,6 +215,9 @@ println!("job {} {}", job.job_id, job.status.as_str());
 
 The main embeddable operations are:
 
+- `convert_asset`, `convert_batch_assets`, and `preflight_asset`: business
+  facade APIs that write a standard artifact package and hide low-level mesh
+  options behind `AssetConversionProfile`.
 - `detect_format` and `inspect_path`: probe, asset discovery, and optional real
   import validation.
 - `convert_path_to_glb`: single-file conversion with mesh cleanup, GLB
@@ -338,6 +352,14 @@ For directory inputs, batch discovery uses supported extensions first and only
 reads a small file header for unknown extensions to avoid loading unrelated
 large files during candidate screening. Passing a file path explicitly still
 forces an attempted conversion for that file.
+
+## Business Asset Packages
+
+`convert_asset` is the recommended library entry when a business system wants a
+complete lightweight package instead of a loose GLB path. Single-file packages
+contain `model.glb`, `metadata.json`, `source-info.json`, and
+`diagnostics.json`. `convert_batch_assets` writes `manifest.json`,
+`source-info.json`, `diagnostics.json`, and an `outputs` directory.
 
 ## Local Job Store
 
