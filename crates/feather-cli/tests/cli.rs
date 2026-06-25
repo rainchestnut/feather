@@ -6,7 +6,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use feather_lite::{
     BATCH_MANIFEST_CONTRACT_VERSION, CACHE_DUMP_MANIFEST_CONTRACT_VERSION,
     FORMAT_CAPABILITIES_CONTRACT_VERSION, GlbExportOptions, INSPECT_REPORT_CONTRACT_VERSION,
-    LiteDocument, LiteMaterial, LiteMesh, LiteNode, LitePrimitive, export_glb,
+    JOB_RECORD_CONTRACT_VERSION, LiteDocument, LiteMaterial, LiteMesh, LiteNode, LitePrimitive,
+    export_glb,
 };
 use miniz_oxide::deflate::compress_to_vec;
 
@@ -165,6 +166,68 @@ fn inspect_and_convert_fixture_from_cli() {
     assert!(metadata_json.contains("\"primitive_count\": 1"));
     assert!(metadata_json.contains("\"vertex_count\": 4"));
     assert!(metadata_json.contains("\"triangle_count\": 2"));
+
+    fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
+}
+
+#[test]
+fn job_convert_creates_business_artifact_package_from_cli() {
+    let fixture = workspace_fixture("sample_embedded_cache.CATPart");
+    let temp_dir = unique_temp_dir("job-convert");
+    fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+    let store_dir = temp_dir.join("jobs");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_feather"))
+        .arg("job")
+        .arg("convert")
+        .arg(&fixture)
+        .arg("--store")
+        .arg(&store_dir)
+        .arg("--json")
+        .output()
+        .expect("job convert command should run");
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout).expect("job convert should emit valid JSON");
+    assert_eq!(parsed["contract_version"], JOB_RECORD_CONTRACT_VERSION);
+    assert_eq!(parsed["status"], "succeeded");
+    assert_eq!(parsed["result"]["kind"], "conversion");
+    assert_eq!(parsed["result"]["triangle_count"], 2);
+    let model_path = parsed["artifacts"]["model_path"]
+        .as_str()
+        .expect("model path should be present");
+    let metadata_path = parsed["artifacts"]["metadata_path"]
+        .as_str()
+        .expect("metadata path should be present");
+    let source_info_path = parsed["artifacts"]["source_info_path"]
+        .as_str()
+        .expect("source info path should be present");
+    assert!(PathBuf::from(model_path).is_file());
+    assert!(PathBuf::from(metadata_path).is_file());
+    assert!(PathBuf::from(source_info_path).is_file());
+
+    let job_id = parsed["job_id"].as_str().expect("job id should be present");
+    let status = Command::new(env!("CARGO_BIN_EXE_feather"))
+        .arg("job")
+        .arg("status")
+        .arg(job_id)
+        .arg("--store")
+        .arg(&store_dir)
+        .arg("--json")
+        .output()
+        .expect("job status command should run");
+    assert!(status.status.success());
+    let status_stdout = String::from_utf8(status.stdout).expect("stdout should be UTF-8");
+    let status_json: serde_json::Value =
+        serde_json::from_str(&status_stdout).expect("job status should emit valid JSON");
+    assert_eq!(status_json["job_id"], job_id);
+    assert_eq!(status_json["status"], "succeeded");
 
     fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
 }

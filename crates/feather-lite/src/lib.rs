@@ -40,6 +40,7 @@ mod export;
 mod importer;
 mod importers;
 mod inspect;
+mod jobs;
 mod mesh;
 mod pipeline;
 mod probe;
@@ -69,6 +70,7 @@ pub use capabilities::{
 pub use contracts::{
     BATCH_MANIFEST_CONTRACT_VERSION, CACHE_DUMP_MANIFEST_CONTRACT_VERSION,
     FORMAT_CAPABILITIES_CONTRACT_VERSION, INSPECT_REPORT_CONTRACT_VERSION,
+    JOB_RECORD_CONTRACT_VERSION,
 };
 pub use diagnostics::batch_failure_category;
 pub use document::{
@@ -86,6 +88,11 @@ pub use importer::{
 pub use inspect::{
     ImportValidationSummary, InspectError, InspectImportCheck, InspectOptions, InspectReport,
     inspect_bytes, inspect_path, validate_imported_input,
+};
+pub use jobs::{
+    JobArtifactPaths, JobConversionSettings, JobError, JobFailure, JobImportLimits, JobRecord,
+    JobReferencePathMapping, JobRequest, JobResult, JobSourceInfo, JobSourceInputInfo, JobStage,
+    JobStatus, LocalJobStore,
 };
 pub use mesh::clean::{MeshOptions, optimize_document};
 pub use mesh::validate::validate_document;

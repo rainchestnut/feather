@@ -14,3 +14,6 @@ pub const BATCH_MANIFEST_CONTRACT_VERSION: &str = "feather.batch-manifest.v1";
 
 /// Contract version emitted by `CacheDumpReport::to_manifest_json` and dump-cache manifests.
 pub const CACHE_DUMP_MANIFEST_CONTRACT_VERSION: &str = "feather.cache-dump-manifest.v1";
+
+/// Contract version emitted by local conversion job records.
+pub const JOB_RECORD_CONTRACT_VERSION: &str = "feather.job-record.v1";

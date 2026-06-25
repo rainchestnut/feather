@@ -6,9 +6,10 @@ use std::process::ExitCode;
 
 use feather_lite::{
     BatchConversionOptions, BatchItem, BatchItemStatus, ConversionOptions, ImportLimits,
-    ImportOptions, InspectOptions, ReferencePathMapping, convert_path_to_glb,
-    dump_embedded_visual_assets_with_limits, format_capabilities, format_capabilities_json,
-    inspect_path, run_batch_conversion,
+    ImportOptions, InspectOptions, JobConversionSettings, JobImportLimits, JobRecord,
+    JobReferencePathMapping, JobResult, JobStatus, LocalJobStore, ReferencePathMapping,
+    convert_path_to_glb, dump_embedded_visual_assets_with_limits, format_capabilities,
+    format_capabilities_json, inspect_path, run_batch_conversion,
 };
 
 fn main() -> ExitCode {
@@ -33,6 +34,7 @@ fn run() -> Result<(), String> {
         "inspect" => inspect(&args),
         "convert" => convert(&args),
         "batch" => batch(&args),
+        "job" => job(&args),
         "dump-cache" => dump_cache(&args),
         "formats" => formats(&args),
         "help" | "--help" | "-h" => {
@@ -355,6 +357,256 @@ fn batch(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+fn job(args: &[String]) -> Result<(), String> {
+    let Some((subcommand, rest)) = args.split_first() else {
+        return Err("job requires convert, batch, status, or retry".to_string());
+    };
+    match subcommand.as_str() {
+        "convert" => job_convert(rest),
+        "batch" => job_batch(rest),
+        "status" => job_status(rest),
+        "retry" => job_retry(rest),
+        other => Err(format!("unknown job subcommand `{other}`")),
+    }
+}
+
+fn job_convert(args: &[String]) -> Result<(), String> {
+    let mut input = None::<PathBuf>;
+    let mut store_dir = PathBuf::from(".feather-jobs");
+    let mut json = false;
+    let mut write_metadata = true;
+    let mut conversion = CliConversionSettings::default();
+
+    let mut index = 0;
+    while index < args.len() {
+        if parse_conversion_option(args, &mut index, &mut conversion)? {
+            index += 1;
+            continue;
+        }
+        match args[index].as_str() {
+            "--store" => {
+                index += 1;
+                store_dir = PathBuf::from(args.get(index).ok_or("--store requires a directory")?);
+            }
+            "--json" => {
+                json = true;
+            }
+            "--no-metadata" => {
+                write_metadata = false;
+            }
+            value if value.starts_with('-') => {
+                return Err(format!("unknown job convert option `{value}`"));
+            }
+            value => {
+                if input.is_some() {
+                    return Err("job convert accepts only one input path".to_string());
+                }
+                input = Some(PathBuf::from(value));
+            }
+        }
+        index += 1;
+    }
+
+    let store = LocalJobStore::new(store_dir);
+    let job = store
+        .create_conversion_job(
+            input.ok_or("job convert requires an input path")?,
+            build_job_conversion_settings(&conversion, write_metadata),
+        )
+        .map_err(|error| error.to_string())?;
+    let job = store
+        .run_job(&job.job_id)
+        .map_err(|error| error.to_string())?;
+    print_job_record(&job, json);
+    fail_if_job_failed(&job)
+}
+
+fn job_batch(args: &[String]) -> Result<(), String> {
+    let mut inputs = Vec::<PathBuf>::new();
+    let mut store_dir = PathBuf::from(".feather-jobs");
+    let mut json = false;
+    let mut check_only = false;
+    let mut write_metadata = true;
+    let mut conversion = CliConversionSettings::default();
+
+    let mut index = 0;
+    while index < args.len() {
+        if parse_conversion_option(args, &mut index, &mut conversion)? {
+            index += 1;
+            continue;
+        }
+        match args[index].as_str() {
+            "--store" => {
+                index += 1;
+                store_dir = PathBuf::from(args.get(index).ok_or("--store requires a directory")?);
+            }
+            "--json" => {
+                json = true;
+            }
+            "--check-only" => {
+                check_only = true;
+            }
+            "--no-metadata" => {
+                write_metadata = false;
+            }
+            value if value.starts_with('-') => {
+                return Err(format!("unknown job batch option `{value}`"));
+            }
+            value => inputs.push(PathBuf::from(value)),
+        }
+        index += 1;
+    }
+
+    if inputs.is_empty() {
+        return Err("job batch requires at least one input path".to_string());
+    }
+
+    let store = LocalJobStore::new(store_dir);
+    let job = store
+        .create_batch_job(
+            inputs,
+            check_only,
+            build_job_conversion_settings(&conversion, write_metadata),
+        )
+        .map_err(|error| error.to_string())?;
+    let job = store
+        .run_job(&job.job_id)
+        .map_err(|error| error.to_string())?;
+    print_job_record(&job, json);
+    fail_if_job_failed(&job)
+}
+
+fn job_status(args: &[String]) -> Result<(), String> {
+    let mut job_id = None::<String>;
+    let mut store_dir = PathBuf::from(".feather-jobs");
+    let mut json = false;
+
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--store" => {
+                index += 1;
+                store_dir = PathBuf::from(args.get(index).ok_or("--store requires a directory")?);
+            }
+            "--json" => {
+                json = true;
+            }
+            value if value.starts_with('-') => {
+                return Err(format!("unknown job status option `{value}`"));
+            }
+            value => {
+                if job_id.is_some() {
+                    return Err("job status accepts only one job id".to_string());
+                }
+                job_id = Some(value.to_string());
+            }
+        }
+        index += 1;
+    }
+
+    let store = LocalJobStore::new(store_dir);
+    let job = store
+        .load_job(&job_id.ok_or("job status requires a job id")?)
+        .map_err(|error| error.to_string())?;
+    print_job_record(&job, json);
+    Ok(())
+}
+
+fn job_retry(args: &[String]) -> Result<(), String> {
+    let mut job_id = None::<String>;
+    let mut store_dir = PathBuf::from(".feather-jobs");
+    let mut json = false;
+
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--store" => {
+                index += 1;
+                store_dir = PathBuf::from(args.get(index).ok_or("--store requires a directory")?);
+            }
+            "--json" => {
+                json = true;
+            }
+            value if value.starts_with('-') => {
+                return Err(format!("unknown job retry option `{value}`"));
+            }
+            value => {
+                if job_id.is_some() {
+                    return Err("job retry accepts only one job id".to_string());
+                }
+                job_id = Some(value.to_string());
+            }
+        }
+        index += 1;
+    }
+
+    let store = LocalJobStore::new(store_dir);
+    let job = store
+        .retry_job(&job_id.ok_or("job retry requires a job id")?)
+        .map_err(|error| error.to_string())?;
+    print_job_record(&job, json);
+    fail_if_job_failed(&job)
+}
+
+fn print_job_record(job: &JobRecord, json: bool) {
+    if json {
+        print!("{}", job.to_json_string());
+        return;
+    }
+
+    println!("job: {}", job.job_id);
+    println!("status: {}", job.status.as_str());
+    println!("stage: {}", job.stage.as_str());
+    println!("artifacts: {}", job.artifacts.root_dir.display());
+    if let Some(result) = &job.result {
+        match result {
+            JobResult::Conversion {
+                output_path,
+                metadata_path,
+                triangle_count,
+                ..
+            } => {
+                println!("output: {}", output_path.display());
+                if let Some(metadata_path) = metadata_path {
+                    println!("metadata: {}", metadata_path.display());
+                }
+                println!("triangles: {triangle_count}");
+            }
+            JobResult::Batch {
+                manifest_path,
+                input_count,
+                converted_count,
+                checked_count,
+                failed_count,
+            } => {
+                println!("manifest: {}", manifest_path.display());
+                println!("inputs: {input_count}");
+                println!("converted: {converted_count}");
+                println!("checked: {checked_count}");
+                println!("failed: {failed_count}");
+            }
+        }
+    }
+    if let Some(failure) = &job.failure {
+        println!("failure_stage: {}", failure.stage);
+        println!("failure_category: {}", failure.category);
+        println!("retryable: {}", failure.retryable);
+        println!("failure: {}", failure.message);
+    }
+}
+
+fn fail_if_job_failed(job: &JobRecord) -> Result<(), String> {
+    if job.status == JobStatus::Failed {
+        let message = job
+            .failure
+            .as_ref()
+            .map(|failure| failure.message.clone())
+            .unwrap_or_else(|| "job failed".to_string());
+        return Err(format!("job `{}` failed: {message}", job.job_id));
+    }
+    Ok(())
+}
+
 fn print_batch_item(item: &BatchItem) {
     match &item.status {
         BatchItemStatus::Ok {
@@ -442,6 +694,12 @@ fn print_usage() {
     println!(
         "  feather batch <input...> --out <directory> [--manifest <path>] [--chord-error <source-unit-value>] [--resolve-dir <dir>] [--map-root <old-prefix>=<new-root>] [--max-input-bytes <bytes>] [--max-ole-streams <count>] [--max-ole-stream-bytes <bytes>] [--max-ole-total-bytes <bytes>] [--max-archive-entries <count>] [--max-archive-entry-bytes <bytes>] [--max-archive-total-bytes <bytes>] [--max-step-curve-segments <count>] [--max-step-spline-degree <count>] [--max-step-spline-control-points <count>] [--max-step-face-loops <count>] [--max-step-face-vertices <count>] [--max-step-assembly-nodes <count>] [--check-only] [--lod low|medium|high|none] [--max-triangles <count>] [--quantize <grid-step>] [--no-normals]"
     );
+    println!("  feather job convert <input> [--store <directory>] [--json] [conversion options]");
+    println!(
+        "  feather job batch <input...> [--store <directory>] [--json] [--check-only] [conversion options]"
+    );
+    println!("  feather job status <job-id> [--store <directory>] [--json]");
+    println!("  feather job retry <job-id> [--store <directory>] [--json]");
     println!(
         "  feather dump-cache <input> --out <directory> [--max-input-bytes <bytes>] [--max-ole-streams <count>] [--max-ole-stream-bytes <bytes>] [--max-ole-total-bytes <bytes>] [--max-archive-entries <count>] [--max-archive-entry-bytes <bytes>] [--max-archive-total-bytes <bytes>]"
     );
@@ -680,4 +938,26 @@ fn build_conversion_options(
     options.import = build_import_options(settings);
     options.export.include_normals = !settings.omit_normals;
     options
+}
+
+/// Builds persisted job settings from the same CLI flags used by conversion.
+fn build_job_conversion_settings(
+    settings: &CliConversionSettings,
+    write_metadata: bool,
+) -> JobConversionSettings {
+    JobConversionSettings {
+        write_metadata,
+        optimize_mesh: !settings.no_optimize,
+        include_normals: !settings.omit_normals,
+        max_triangles: settings.max_triangles,
+        quantize_step: settings.quantize_step,
+        max_lod_error: settings.max_lod_error,
+        resolve_dirs: settings.resolve_dirs.clone(),
+        reference_path_mappings: settings
+            .reference_path_mappings
+            .iter()
+            .map(JobReferencePathMapping::from)
+            .collect(),
+        limits: JobImportLimits::from(settings.limits),
+    }
 }

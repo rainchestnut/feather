@@ -176,3 +176,59 @@ Required asset fields:
 - `byte_end`: integer
 - `entry_name`: archive/OLE entry name or `null`
 - `file`: output file name
+
+## `feather.job-record.v1`
+
+Emitted by:
+
+- `JobRecord::to_json_string`
+- `feather job convert --json`
+- `feather job batch --json`
+- `feather job status --json`
+- `feather job retry --json`
+
+Required top-level fields:
+
+- `contract_version`: always `feather.job-record.v1`
+- `job_id`: stable local job identifier
+- `status`: `queued`, `running`, `succeeded`, `failed`, or `cancelled`
+- `stage`: `queued`, `running`, `import`, `export`, `io`, `batch`,
+  `succeeded`, or `failed`
+- `request`: persisted request object
+- `artifacts`: reserved artifact paths
+- `created_at_unix_ms`: integer
+- `updated_at_unix_ms`: integer
+- `started_at_unix_ms`: integer or `null`
+- `finished_at_unix_ms`: integer or `null`
+- `failure`: failure object or `null`
+- `result`: result object or `null`
+
+Request object variants:
+
+- `{"kind":"convert", ...}` includes `input_path` and persisted conversion
+  `settings`
+- `{"kind":"batch", ...}` includes `input_paths`, `check_only`, and persisted
+  conversion `settings`
+
+Required artifact fields:
+
+- `root_dir`: artifact package root
+- `model_path`: single conversion GLB path or `null`
+- `metadata_path`: single conversion metadata path or `null`
+- `manifest_path`: batch manifest path or `null`
+- `batch_output_dir`: batch output directory or `null`
+- `source_info_path`: source package metadata path
+
+When present, `failure` includes:
+
+- `stage`: failed stage string
+- `category`: stable category string
+- `message`: human-readable failure message
+- `retryable`: boolean
+
+When present, `result.kind` is either:
+
+- `conversion`: includes output path, optional metadata path, source format,
+  node, mesh, primitive, vertex, and triangle counts
+- `batch`: includes manifest path plus input, converted, checked, and failed
+  counts

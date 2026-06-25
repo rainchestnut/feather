@@ -9,7 +9,7 @@ The workspace contains two deliverables:
 
 - `crates/feather-lite`: the reusable core library. It owns probing, import,
   lightweight IR validation, mesh preparation, GLB export, inspect reports,
-  batch manifests, and embedded cache dumping.
+  batch manifests, local conversion job records, and embedded cache dumping.
 - `crates/feather-cli`: the `feather` executable. It is intentionally a thin
   command-line shell around `feather-lite`, responsible for argument parsing,
   status output, and process exit codes.
@@ -154,8 +154,8 @@ integration surface for production code.
 use std::path::{Path, PathBuf};
 
 use feather_lite::{
-    BatchConversionOptions, ConversionOptions, InspectOptions, ReferencePathMapping,
-    convert_path_to_glb, inspect_path, run_batch_conversion,
+    BatchConversionOptions, ConversionOptions, InspectOptions, JobConversionSettings,
+    LocalJobStore, ReferencePathMapping, convert_path_to_glb, inspect_path, run_batch_conversion,
 };
 
 let inspect = inspect_path(
@@ -192,6 +192,14 @@ let batch = run_batch_conversion(
     },
 )?;
 println!("{} converted", batch.report.converted_count());
+
+let store = LocalJobStore::new(".feather-jobs");
+let job = store.create_conversion_job(
+    PathBuf::from("assembly.CATProduct"),
+    JobConversionSettings::default(),
+)?;
+let job = store.run_job(&job.job_id)?;
+println!("job {} {}", job.job_id, job.status.as_str());
 ```
 
 The main embeddable operations are:
@@ -202,6 +210,8 @@ The main embeddable operations are:
   validation, and optional sidecar metadata.
 - `run_batch_conversion`: recursive file/directory batch conversion or
   check-only preflight with a manifest.
+- `LocalJobStore`: file-backed business job records for queued, running,
+  succeeded, failed, and retried conversion or batch jobs.
 - `dump_embedded_visual_assets`: extraction diagnostics for readable preview
   payloads inside private containers.
 - `format_capabilities` and `format_capabilities_json`: the machine-readable
@@ -233,7 +243,7 @@ output paths and sizes for successful conversions, and stage/category/message
 for failures. A failed item does not stop later items from running, but the CLI
 returns a non-zero exit code after writing the manifest when any item fails.
 The versioned JSON contracts for capabilities, inspect reports, batch
-manifests, and cache-dump manifests are documented in
+manifests, local job records, and cache-dump manifests are documented in
 [`docs/json_contracts.md`](docs/json_contracts.md).
 Compatibility levels and corpus acceptance requirements are documented in
 [`docs/compatibility.md`](docs/compatibility.md).
@@ -259,6 +269,10 @@ cargo run -p feather-cli -- convert assembly.CATProduct -o assembly.glb --no-nor
 cargo run -p feather-cli -- convert model.step -o model.glb --chord-error 0.05 --max-step-curve-segments 16384 --max-step-spline-degree 16 --max-step-spline-control-points 16384
 cargo run -p feather-cli -- batch ./incoming-cad --out ./converted-glb --resolve-dir ./parts --map-root 'C:\vault\old=./released'
 cargo run -p feather-cli -- batch ./incoming-cad --out ./preflight --check-only --resolve-dir ./parts
+cargo run -p feather-cli -- job convert model.CATPart --store ./.feather-jobs --json
+cargo run -p feather-cli -- job batch ./incoming-cad --store ./.feather-jobs --json
+cargo run -p feather-cli -- job status job-123 --store ./.feather-jobs --json
+cargo run -p feather-cli -- job retry job-123 --store ./.feather-jobs --json
 cargo run -p feather-cli -- dump-cache model.CATPart --out ./dump
 ```
 
@@ -324,3 +338,18 @@ For directory inputs, batch discovery uses supported extensions first and only
 reads a small file header for unknown extensions to avoid loading unrelated
 large files during candidate screening. Passing a file path explicitly still
 forces an attempted conversion for that file.
+
+## Local Job Store
+
+`feather job` wraps conversion and batch work in a persistent business record
+without requiring a database or service framework. A store contains
+`jobs/<job-id>/job.json` plus an `artifacts` directory. Single-file conversion
+jobs reserve `model.glb`, optional `metadata.json`, and `source-info.json`.
+Batch jobs reserve `manifest.json`, `source-info.json`, and an `outputs`
+directory.
+
+Job records use `queued`, `running`, `succeeded`, `failed`, and `cancelled`
+statuses. Failed jobs keep a structured `failure` object with `stage`,
+`category`, `message`, and `retryable`, so a service layer can expose the same
+record through HTTP without scraping CLI text. `feather job retry` reuses the
+persisted request and artifact paths.
