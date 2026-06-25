@@ -46,6 +46,13 @@ struct CircleGeometry {
     radius: f32,
 }
 
+/// Analytic right elliptic-cylinder parameters resolved from an ellipse extrusion.
+#[derive(Clone, Copy)]
+struct EllipticCylinderGeometry {
+    ellipse: EllipseGeometry,
+    extrusion_axis: [f32; 3],
+}
+
 /// STEP B-Spline curve data normalized for bounded de Boor evaluation.
 struct BsplineCurveGeometry {
     record_id: usize,
@@ -131,6 +138,7 @@ impl RevolvedSurfaceGeometry {
 enum LinearExtrusionSurfaceGeometry {
     Plane { origin: [f32; 3], normal: [f32; 3] },
     Cylinder(RevolvedSurfaceGeometry),
+    EllipticCylinder(EllipticCylinderGeometry),
 }
 
 /// Faces owned by one reusable STEP solid, or one fallback ungrouped face set.
@@ -365,7 +373,7 @@ fn append_brep_face(
         }
         kind => {
             return Err(unsupported(format!(
-                "#{} ADVANCED_FACE uses {kind} surface; supported surfaces are PLANE, CYLINDRICAL_SURFACE, CONICAL_SURFACE, SPHERICAL_SURFACE, TOROIDAL_SURFACE, and LINE/CIRCLE SURFACE_OF_LINEAR_EXTRUSION",
+                "#{} ADVANCED_FACE uses {kind} surface; supported surfaces are PLANE, CYLINDRICAL_SURFACE, CONICAL_SURFACE, SPHERICAL_SURFACE, TOROIDAL_SURFACE, and LINE/CIRCLE/ELLIPSE SURFACE_OF_LINEAR_EXTRUSION",
                 face.id
             )));
         }
@@ -594,6 +602,11 @@ fn tessellate_linear_extrusion_face(
         LinearExtrusionSurfaceGeometry::Cylinder(geometry) => tessellate_revolved_geometry(
             boundaries, geometry, same_sense, records, surface.id, face_id,
         ),
+        LinearExtrusionSurfaceGeometry::EllipticCylinder(geometry) => {
+            tessellate_elliptic_cylinder_geometry(
+                boundaries, geometry, same_sense, records, surface.id, face_id,
+            )
+        }
     }
 }
 
@@ -658,6 +671,66 @@ fn tessellate_spherical_face(
         &mut indices,
         &boundaries.positions,
         sphere,
+        same_sense,
+        face_id,
+    )?;
+    Ok((indices, normals))
+}
+
+fn tessellate_elliptic_cylinder_geometry(
+    boundaries: &ResolvedFaceBoundaries,
+    geometry: EllipticCylinderGeometry,
+    same_sense: bool,
+    records: &HashMap<usize, &StepRecord>,
+    surface_id: usize,
+    face_id: usize,
+) -> Result<(Vec<u32>, Vec<[f32; 3]>), ImportError> {
+    let mut projected = Vec::with_capacity(boundaries.positions.len());
+    let mut normals = Vec::with_capacity(boundaries.positions.len());
+    let tolerance = geometry_tolerance(&boundaries.positions);
+    let angle_scale = geometry
+        .ellipse
+        .semi_axis_1
+        .max(geometry.ellipse.semi_axis_2);
+
+    for (loop_index, boundary) in boundaries.loops.iter().enumerate() {
+        validate_elliptic_cylinder_loop_geometry(
+            boundary.loop_id,
+            geometry,
+            records,
+            face_id,
+            surface_id,
+        )?;
+        let mut loop_projected = Vec::with_capacity(boundary.range.len());
+        let mut previous_angle = None::<f32>;
+        for position in &boundaries.positions[boundary.range.clone()] {
+            let projection = project_elliptic_cylinder_point(
+                *position, geometry, tolerance, face_id, surface_id,
+            )?;
+            let angle = unwrap_angle(previous_angle, projection.angle);
+            previous_angle = Some(angle);
+            loop_projected.push([angle * angle_scale, projection.height]);
+            normals.push(if same_sense {
+                projection.normal
+            } else {
+                scale3(projection.normal, -1.0)
+            });
+        }
+        if loop_index > 0 {
+            align_periodic_loop(
+                &mut loop_projected,
+                &projected[boundaries.loops[0].range.clone()],
+                [Some(std::f32::consts::TAU * angle_scale), None],
+            );
+        }
+        projected.extend(loop_projected);
+    }
+
+    let mut indices = triangulate_projected_face(&projected, &boundaries.hole_indices(), face_id)?;
+    orient_elliptic_cylinder_triangles(
+        &mut indices,
+        &boundaries.positions,
+        geometry,
         same_sense,
         face_id,
     )?;
@@ -898,6 +971,12 @@ struct TrimmedCurveGeometry<'a> {
     trim_1: f64,
     trim_2: f64,
     sense_agreement: bool,
+}
+
+struct EllipticCylinderProjection {
+    angle: f32,
+    height: f32,
+    normal: [f32; 3],
 }
 
 fn resolve_loop_edge_geometries<'a>(
@@ -2294,11 +2373,190 @@ fn resolve_linear_extrusion_surface(
                 },
             ))
         }
+        "ELLIPSE" => {
+            let ellipse = resolve_ellipse(swept_curve, records)?;
+            let axis_alignment = dot3(ellipse.placement.axis, extrusion_direction).abs();
+            if axis_alignment < 1.0 - 1.0e-5 {
+                return Err(unsupported(format!(
+                    "#{} SURFACE_OF_LINEAR_EXTRUSION ELLIPSE sweep axis must be parallel to the ellipse axis",
+                    surface.id
+                )));
+            }
+            let x_axis = ellipse.placement.x_axis;
+            let y_axis = normalize3(cross3(extrusion_direction, x_axis)).ok_or_else(|| {
+                ImportError::InvalidData(format!(
+                    "#{} SURFACE_OF_LINEAR_EXTRUSION has an invalid elliptic-cylinder basis",
+                    surface.id
+                ))
+            })?;
+            Ok(LinearExtrusionSurfaceGeometry::EllipticCylinder(
+                EllipticCylinderGeometry {
+                    ellipse: EllipseGeometry {
+                        placement: AxisPlacement {
+                            origin: ellipse.placement.origin,
+                            axis: extrusion_direction,
+                            x_axis,
+                            y_axis,
+                        },
+                        semi_axis_1: ellipse.semi_axis_1,
+                        semi_axis_2: ellipse.semi_axis_2,
+                    },
+                    extrusion_axis: extrusion_direction,
+                },
+            ))
+        }
         kind => Err(unsupported(format!(
-            "#{} SURFACE_OF_LINEAR_EXTRUSION sweeps unsupported curve {kind}; supported swept curves are LINE and CIRCLE",
+            "#{} SURFACE_OF_LINEAR_EXTRUSION sweeps unsupported curve {kind}; supported swept curves are LINE, CIRCLE, and ELLIPSE",
             surface.id
         ))),
     }
+}
+
+fn validate_elliptic_cylinder_loop_geometry(
+    loop_id: usize,
+    surface: EllipticCylinderGeometry,
+    records: &HashMap<usize, &StepRecord>,
+    face_id: usize,
+    surface_id: usize,
+) -> Result<(), ImportError> {
+    let loop_record = require_record(records, loop_id, "elliptic-cylinder face loop")?;
+    if loop_record.kind != "EDGE_LOOP" {
+        return Err(unsupported(format!(
+            "#{face_id} ELLIPSE SURFACE_OF_LINEAR_EXTRUSION requires EDGE_LOOP topology with supported curve edges"
+        )));
+    }
+    for resolved in resolve_loop_edge_geometries(loop_record, records, "elliptic-cylinder edge")? {
+        match resolved.geometry.kind.as_str() {
+            "LINE" => {
+                validate_elliptic_cylinder_line_edge(
+                    resolved.edge,
+                    resolved.geometry,
+                    surface,
+                    records,
+                    surface_id,
+                )?;
+            }
+            "ELLIPSE" => {
+                // Ellipse edges are sampled by the boundary tessellator and
+                // every emitted point is checked against the swept ellipse.
+            }
+            _ if is_bspline_curve_with_knots(resolved.geometry) => {
+                // B-Spline samples are validated against the surface before
+                // triangulation, matching the other analytic surfaces.
+            }
+            kind => {
+                return Err(unsupported(format!(
+                    "#{} ELLIPSE SURFACE_OF_LINEAR_EXTRUSION boundary uses unsupported edge geometry {kind}",
+                    resolved.edge.id
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_elliptic_cylinder_line_edge(
+    edge: &StepRecord,
+    line: &StepRecord,
+    surface: EllipticCylinderGeometry,
+    records: &HashMap<usize, &StepRecord>,
+    surface_id: usize,
+) -> Result<(), ImportError> {
+    let edge_args = require_args(edge, 5)?;
+    let start_id = parse_reference(edge_args[1]).ok_or_else(|| {
+        ImportError::InvalidData(format!("#{} EDGE_CURVE has no start vertex", edge.id))
+    })?;
+    let start = resolve_vertex_point(start_id, records)?;
+    let end_id = parse_reference(edge_args[2]).ok_or_else(|| {
+        ImportError::InvalidData(format!("#{} EDGE_CURVE has no end vertex", edge.id))
+    })?;
+    let end = resolve_vertex_point(end_id, records)?;
+    let tolerance = [start, end, surface.ellipse.placement.origin]
+        .iter()
+        .flat_map(|position| position.iter())
+        .fold(1.0_f32, |scale, value| scale.max(value.abs()))
+        * 1.0e-5;
+    project_elliptic_cylinder_point(start, surface, tolerance, edge.id, surface_id)?;
+    project_elliptic_cylinder_point(end, surface, tolerance, edge.id, surface_id)?;
+
+    let line_args = require_args(line, 3)?;
+    let vector_id = parse_reference(line_args[2]).ok_or_else(|| {
+        ImportError::InvalidData(format!("#{} LINE has no vector reference", line.id))
+    })?;
+    let direction = resolve_vector_direction(vector_id, records)?;
+    if length3(cross3(direction, surface.extrusion_axis)) > 1.0e-5 {
+        return Err(ImportError::InvalidData(format!(
+            "#{} LINE boundary is not parallel to ELLIPSE SURFACE_OF_LINEAR_EXTRUSION",
+            edge.id
+        )));
+    }
+    Ok(())
+}
+
+fn project_elliptic_cylinder_point(
+    position: [f32; 3],
+    surface: EllipticCylinderGeometry,
+    tolerance: f32,
+    face_id: usize,
+    surface_id: usize,
+) -> Result<EllipticCylinderProjection, ImportError> {
+    let ellipse = surface.ellipse;
+    let offset = sub3(position, ellipse.placement.origin);
+    let height = dot3(offset, surface.extrusion_axis);
+    let section_offset = sub3(offset, scale3(surface.extrusion_axis, height));
+    let axial_residual = dot3(section_offset, surface.extrusion_axis).abs();
+    let x = dot3(section_offset, ellipse.placement.x_axis);
+    let y = dot3(section_offset, ellipse.placement.y_axis);
+    let equation = (x / ellipse.semi_axis_1).powi(2) + (y / ellipse.semi_axis_2).powi(2);
+    if axial_residual > tolerance
+        || !height.is_finite()
+        || !equation.is_finite()
+        || (equation - 1.0).abs() > 1.0e-4
+    {
+        return Err(ImportError::InvalidData(format!(
+            "#{face_id} ADVANCED_FACE boundary does not lie on ELLIPSE SURFACE_OF_LINEAR_EXTRUSION #{surface_id}"
+        )));
+    }
+
+    let angle = (y / ellipse.semi_axis_2).atan2(x / ellipse.semi_axis_1);
+    let normal = elliptic_cylinder_normal_from_section(x, y, surface, face_id)?;
+    Ok(EllipticCylinderProjection {
+        angle,
+        height,
+        normal,
+    })
+}
+
+fn elliptic_cylinder_normal_at(
+    position: [f32; 3],
+    surface: EllipticCylinderGeometry,
+    face_id: usize,
+) -> Result<[f32; 3], ImportError> {
+    let ellipse = surface.ellipse;
+    let offset = sub3(position, ellipse.placement.origin);
+    let height = dot3(offset, surface.extrusion_axis);
+    let section_offset = sub3(offset, scale3(surface.extrusion_axis, height));
+    let x = dot3(section_offset, ellipse.placement.x_axis);
+    let y = dot3(section_offset, ellipse.placement.y_axis);
+    elliptic_cylinder_normal_from_section(x, y, surface, face_id)
+}
+
+fn elliptic_cylinder_normal_from_section(
+    x: f32,
+    y: f32,
+    surface: EllipticCylinderGeometry,
+    face_id: usize,
+) -> Result<[f32; 3], ImportError> {
+    let ellipse = surface.ellipse;
+    normalize3(add3(
+        scale3(ellipse.placement.x_axis, x / ellipse.semi_axis_1.powi(2)),
+        scale3(ellipse.placement.y_axis, y / ellipse.semi_axis_2.powi(2)),
+    ))
+    .ok_or_else(|| {
+        ImportError::InvalidData(format!(
+            "#{face_id} ELLIPSE SURFACE_OF_LINEAR_EXTRUSION has an invalid surface normal"
+        ))
+    })
 }
 
 fn resolve_sphere(
@@ -3186,6 +3444,36 @@ fn orient_revolved_triangles(
             return Err(ImportError::InvalidData(format!(
                 "#{face_id} {} produced a degenerate triangle",
                 surface.kind.step_name()
+            )));
+        }
+        if alignment < 0.0 {
+            triangle.swap(1, 2);
+        }
+    }
+    Ok(())
+}
+
+fn orient_elliptic_cylinder_triangles(
+    indices: &mut [u32],
+    positions: &[[f32; 3]],
+    surface: EllipticCylinderGeometry,
+    same_sense: bool,
+    face_id: usize,
+) -> Result<(), ImportError> {
+    for triangle in indices.chunks_exact_mut(3) {
+        let a = positions[triangle[0] as usize];
+        let b = positions[triangle[1] as usize];
+        let c = positions[triangle[2] as usize];
+        let triangle_normal = cross3(sub3(b, a), sub3(c, a));
+        let center = scale3(add3(add3(a, b), c), 1.0 / 3.0);
+        let mut desired = elliptic_cylinder_normal_at(center, surface, face_id)?;
+        if !same_sense {
+            desired = scale3(desired, -1.0);
+        }
+        let alignment = dot3(triangle_normal, desired);
+        if !alignment.is_finite() || alignment.abs() <= GEOMETRY_EPSILON {
+            return Err(ImportError::InvalidData(format!(
+                "#{face_id} ELLIPSE SURFACE_OF_LINEAR_EXTRUSION produced a degenerate triangle"
             )));
         }
         if alignment < 0.0 {
