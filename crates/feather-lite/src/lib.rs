@@ -28,6 +28,7 @@
 
 mod assembly;
 mod assets;
+mod atomic_write;
 mod batch;
 mod cache;
 mod cache_dump;

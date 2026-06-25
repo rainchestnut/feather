@@ -8,6 +8,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use crate::atomic_write::{remove_file_if_created, write_atomic};
 use crate::capabilities::{format_capability, push_format_capability_json};
 use crate::contracts::BATCH_MANIFEST_CONTRACT_VERSION;
 use crate::diagnostics::{batch_failure_category, required_condition_for_failure};
@@ -478,6 +479,7 @@ pub fn run_batch_conversion(
         return Err(BatchConversionError::EmptyInputSet);
     }
 
+    let output_snapshots = collect_batch_output_snapshots(&input_files, options);
     let mut results = Vec::new();
     for (item_index, input_path) in input_files.iter().enumerate() {
         results.push(run_batch_item(item_index, input_path, options));
@@ -488,17 +490,75 @@ pub fn run_batch_conversion(
         .clone()
         .unwrap_or_else(|| options.output_dir.join("manifest.json"));
     let report = BatchReport::new(results);
-    fs::write(&manifest_path, report.to_manifest_json()).map_err(|source| {
-        BatchConversionError::WriteManifest {
+    if let Err(source) = write_atomic(&manifest_path, report.to_manifest_json()) {
+        cleanup_batch_created_outputs(&report, &output_snapshots);
+        return Err(BatchConversionError::WriteManifest {
             path: manifest_path.clone(),
             source,
-        }
-    })?;
+        });
+    }
 
     Ok(BatchConversionReport {
         manifest_path,
         report,
     })
+}
+
+/// Output paths observed before item conversion starts.
+#[derive(Debug, Clone)]
+struct BatchOutputSnapshot {
+    output_path: PathBuf,
+    output_existed: bool,
+    metadata_path: Option<PathBuf>,
+    metadata_existed: bool,
+}
+
+/// Captures whether deterministic batch outputs already existed before export.
+fn collect_batch_output_snapshots(
+    input_files: &[PathBuf],
+    options: &BatchConversionOptions,
+) -> Vec<BatchOutputSnapshot> {
+    if options.check_only {
+        return Vec::new();
+    }
+
+    input_files
+        .iter()
+        .enumerate()
+        .map(|(item_index, input_path)| {
+            let output_path = options
+                .output_dir
+                .join(batch_output_file_name(item_index, input_path));
+            let metadata_path = options
+                .conversion
+                .write_metadata
+                .then(|| output_path.with_extension("metadata.json"));
+            let metadata_existed = metadata_path.as_ref().is_some_and(|path| path.exists());
+            BatchOutputSnapshot {
+                output_existed: output_path.exists(),
+                output_path,
+                metadata_path,
+                metadata_existed,
+            }
+        })
+        .collect()
+}
+
+/// Cleans item artifacts that were created before manifest persistence failed.
+fn cleanup_batch_created_outputs(report: &BatchReport, snapshots: &[BatchOutputSnapshot]) {
+    for item in &report.items {
+        if !item.status.is_converted() {
+            continue;
+        }
+
+        let Some(snapshot) = snapshots.get(item.index) else {
+            continue;
+        };
+        remove_file_if_created(&snapshot.output_path, snapshot.output_existed);
+        if let Some(metadata_path) = &snapshot.metadata_path {
+            remove_file_if_created(metadata_path, snapshot.metadata_existed);
+        }
+    }
 }
 
 /// Runs batch preflight: real import plus validation, no export side effects.

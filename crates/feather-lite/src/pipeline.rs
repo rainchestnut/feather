@@ -2,9 +2,9 @@
 
 use std::error::Error;
 use std::fmt;
-use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::atomic_write::{remove_file_if_created, write_atomic};
 use crate::export::{
     ExportError, GlbExportOptions, export_glb, export_metadata_json, validate_glb_payload,
 };
@@ -103,18 +103,33 @@ pub fn convert_path_to_glb(
 
     let glb = export_glb(&document, &options.export)?;
     let glb_validation = validate_glb_payload(&glb)?;
-    fs::write(output_path, glb)?;
 
-    let metadata_path = if options.write_metadata {
-        let metadata_path = options
+    let metadata_path = options.write_metadata.then(|| {
+        options
             .metadata_path
             .clone()
-            .unwrap_or_else(|| output_path.with_extension("metadata.json"));
-        fs::write(&metadata_path, export_metadata_json(&document))?;
-        Some(metadata_path)
-    } else {
-        None
-    };
+            .unwrap_or_else(|| output_path.with_extension("metadata.json"))
+    });
+    let metadata_json = metadata_path
+        .as_ref()
+        .map(|_| export_metadata_json(&document));
+    let output_existed = output_path.exists();
+    let metadata_existed = metadata_path.as_ref().is_some_and(|path| path.exists());
+
+    let write_result = (|| -> Result<(), ConversionError> {
+        write_atomic(output_path, &glb)?;
+        if let (Some(metadata_path), Some(metadata_json)) = (&metadata_path, &metadata_json) {
+            write_atomic(metadata_path, metadata_json.as_bytes())?;
+        }
+        Ok(())
+    })();
+    if let Err(error) = write_result {
+        remove_file_if_created(output_path, output_existed);
+        if let Some(metadata_path) = &metadata_path {
+            remove_file_if_created(metadata_path, metadata_existed);
+        }
+        return Err(error);
+    }
 
     Ok(ConversionSummary {
         source_format: document.metadata.source_format,

@@ -2,12 +2,13 @@ use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use feather_lite::{
-    FileFormat, GlbExportOptions, INSPECT_REPORT_CONTRACT_VERSION, ImportError, ImportLimits,
-    ImportOptions, ImporterRegistry, InputFile, InspectOptions, LiteDocument, LiteMaterial,
-    LiteMesh, LiteNode, LitePrimitive, MeshOptions, ProbeConfidence, ReferencePathMapping,
-    detect_format, discover_embedded_visual_assets, discover_embedded_visual_assets_with_limits,
-    export_glb, export_metadata_json, import_3dxml_rep_document, inspect_bytes, optimize_document,
-    validate_document, validate_glb_payload,
+    ConversionOptions, FileFormat, GlbExportOptions, INSPECT_REPORT_CONTRACT_VERSION, ImportError,
+    ImportLimits, ImportOptions, ImporterRegistry, InputFile, InspectOptions, LiteDocument,
+    LiteMaterial, LiteMesh, LiteNode, LitePrimitive, MeshOptions, ProbeConfidence,
+    ReferencePathMapping, convert_path_to_glb, detect_format, discover_embedded_visual_assets,
+    discover_embedded_visual_assets_with_limits, export_glb, export_metadata_json,
+    import_3dxml_rep_document, inspect_bytes, optimize_document, validate_document,
+    validate_glb_payload,
 };
 use miniz_oxide::deflate::compress_to_vec;
 
@@ -811,6 +812,37 @@ fn input_byte_limit_is_enforced_by_import_and_inspect_apis() {
             .to_string()
             .contains("resource limit exceeded for input bytes")
     );
+}
+
+#[test]
+fn convert_path_cleans_new_glb_when_metadata_write_fails() {
+    let temp_dir = unique_temp_dir("atomic-metadata-failure");
+    fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+    let input_path = temp_dir.join("fixture.CATPart");
+    let output_path = temp_dir.join("fixture.glb");
+    let metadata_path = temp_dir.join("metadata-target");
+    fs::create_dir_all(&metadata_path).expect("metadata failure directory should be created");
+    fs::write(
+        &input_path,
+        format!("CATPart private payload prefix\n{SAMPLE_CACHE}\nprivate suffix"),
+    )
+    .expect("fixture should be written");
+
+    convert_path_to_glb(
+        &input_path,
+        &output_path,
+        &ConversionOptions {
+            write_metadata: true,
+            metadata_path: Some(metadata_path.clone()),
+            ..ConversionOptions::default()
+        },
+    )
+    .expect_err("directory metadata target should make conversion fail");
+
+    assert!(!output_path.exists());
+    assert!(metadata_path.is_dir());
+
+    fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
 }
 
 #[test]

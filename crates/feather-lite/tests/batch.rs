@@ -2,10 +2,11 @@ use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use feather_lite::{
-    BATCH_MANIFEST_CONTRACT_VERSION, BatchConversionOptions, BatchInputDiagnostic, BatchItem,
-    BatchItemStatus, BatchReport, ConversionOptions, ImportOptions, batch_failure_category,
-    batch_input_diagnostic, batch_output_file_name, collect_batch_input_paths,
-    is_supported_batch_candidate, run_batch_conversion, validate_batch_input_path,
+    BATCH_MANIFEST_CONTRACT_VERSION, BatchConversionError, BatchConversionOptions,
+    BatchInputDiagnostic, BatchItem, BatchItemStatus, BatchReport, ConversionOptions,
+    ImportOptions, batch_failure_category, batch_input_diagnostic, batch_output_file_name,
+    collect_batch_input_paths, is_supported_batch_candidate, run_batch_conversion,
+    validate_batch_input_path,
 };
 
 const SAMPLE_CACHE: &str = "\
@@ -381,6 +382,59 @@ fn batch_runner_converts_inputs_and_writes_manifest_from_core_api() {
     assert_eq!(
         failed["required_condition"],
         "provide a readable lightweight visualization payload: Feather cache, embedded mesh/GLB/glTF/STL/OBJ, ZIP/OLE preview, or resolvable cache-declared reference"
+    );
+
+    fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
+}
+
+#[test]
+fn batch_manifest_write_failure_removes_atomic_temp_file() {
+    let temp_dir = unique_temp_dir("batch-manifest-write-failure");
+    let source_dir = temp_dir.join("sources");
+    let output_dir = temp_dir.join("out");
+    let manifest_path = temp_dir.join("manifest-target");
+    fs::create_dir_all(&source_dir).expect("source dir should be created");
+    fs::create_dir_all(&manifest_path).expect("manifest failure directory should be created");
+
+    let input = source_dir.join("fixture.CATPart");
+    fs::write(
+        &input,
+        format!("CATPart private payload prefix\n{SAMPLE_CACHE}\nprivate suffix"),
+    )
+    .expect("fixture should be written");
+
+    let error = run_batch_conversion(
+        &[input],
+        &BatchConversionOptions {
+            output_dir: output_dir.clone(),
+            manifest_path: Some(manifest_path.clone()),
+            check_only: false,
+            conversion: ConversionOptions {
+                write_metadata: true,
+                ..ConversionOptions::default()
+            },
+        },
+    )
+    .expect_err("directory manifest target should fail manifest writing");
+
+    assert!(matches!(
+        error,
+        BatchConversionError::WriteManifest { path, .. } if path == manifest_path
+    ));
+    assert!(
+        !fs::read_dir(&temp_dir)
+            .expect("temp dir should be readable")
+            .any(|entry| entry
+                .expect("temp entry should be readable")
+                .file_name()
+                .to_string_lossy()
+                .contains(".manifest-target.tmp-"))
+    );
+    assert!(
+        fs::read_dir(&output_dir)
+            .expect("output dir should be readable")
+            .next()
+            .is_none()
     );
 
     fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
