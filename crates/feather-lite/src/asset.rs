@@ -389,13 +389,54 @@ pub struct BatchAssetPackageEnsureResult {
 /// Lightweight preflight result for business callers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssetPreflightResult {
+    pub decision: AssetPreflightDecision,
     pub source_format: String,
     pub capability_status: Option<String>,
     pub visual_asset_count: usize,
     pub importable: bool,
+    pub required_condition: Option<String>,
+    pub quality: Option<AssetQualityReport>,
+    pub node_count: Option<usize>,
     pub mesh_count: Option<usize>,
+    pub primitive_count: Option<usize>,
+    pub vertex_count: Option<usize>,
     pub triangle_count: Option<u64>,
     pub failure: Option<AssetFailure>,
+}
+
+/// Business decision returned by `preflight_asset`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssetPreflightDecision {
+    Ready,
+    NeedsReadableVisualization,
+    NeedsExternalReferences,
+    NeedsUpstreamTessellation,
+    ResourceLimitExceeded,
+    UnsupportedInput,
+    InvalidSourceData,
+    MissingData,
+    IoBlocked,
+    ExportBlocked,
+    Failed,
+}
+
+impl AssetPreflightDecision {
+    /// Returns the stable lowercase decision label for API responses and logs.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::NeedsReadableVisualization => "needs_readable_visualization",
+            Self::NeedsExternalReferences => "needs_external_references",
+            Self::NeedsUpstreamTessellation => "needs_upstream_tessellation",
+            Self::ResourceLimitExceeded => "resource_limit_exceeded",
+            Self::UnsupportedInput => "unsupported_input",
+            Self::InvalidSourceData => "invalid_source_data",
+            Self::MissingData => "missing_data",
+            Self::IoBlocked => "io_blocked",
+            Self::ExportBlocked => "export_blocked",
+            Self::Failed => "failed",
+        }
+    }
 }
 
 /// Error returned by business asset conversion APIs.
@@ -731,6 +772,12 @@ pub fn preflight_asset(
         .import_check
         .as_ref()
         .expect("preflight enables import check");
+    let source_size_bytes = fs::metadata(&request.input_path)
+        .map_err(|source| AssetConversionError::Io {
+            path: request.input_path.clone(),
+            source,
+        })?
+        .len();
     let failure = if import_check.importable {
         None
     } else {
@@ -744,15 +791,23 @@ pub fn preflight_asset(
             retryable: retryable_failure(import_check.failure_category.unwrap_or("other")),
         })
     };
+    let decision = preflight_decision(import_check.importable, import_check.failure_category);
+    let quality = preflight_quality_report(source_size_bytes, import_check);
 
     Ok(AssetPreflightResult {
+        decision,
         source_format: inspect.probe.format.label().to_string(),
         capability_status: inspect
             .capability()
             .map(|capability| capability.status.to_string()),
         visual_asset_count: inspect.visual_assets.len(),
         importable: import_check.importable,
+        required_condition: import_check.required_condition.map(str::to_string),
+        quality,
+        node_count: import_check.node_count,
         mesh_count: import_check.mesh_count,
+        primitive_count: import_check.primitive_count,
+        vertex_count: import_check.vertex_count,
         triangle_count: import_check.triangle_count,
         failure,
     })
@@ -1399,6 +1454,51 @@ fn import_options_from_settings(settings: &JobConversionSettings) -> ImportOptio
         limits: settings.limits.into(),
         ..ImportOptions::default()
     }
+}
+
+fn preflight_decision(importable: bool, failure_category: Option<&str>) -> AssetPreflightDecision {
+    if importable {
+        return AssetPreflightDecision::Ready;
+    }
+    match failure_category.unwrap_or("other") {
+        "no_readable_lightweight_cache" | "native_visualization_not_decoded" => {
+            AssetPreflightDecision::NeedsReadableVisualization
+        }
+        "missing_external_reference" => AssetPreflightDecision::NeedsExternalReferences,
+        "tessellation_pending" => AssetPreflightDecision::NeedsUpstreamTessellation,
+        "resource_limit_exceeded" => AssetPreflightDecision::ResourceLimitExceeded,
+        "unsupported_input" => AssetPreflightDecision::UnsupportedInput,
+        "invalid_source_data" => AssetPreflightDecision::InvalidSourceData,
+        "missing_data" => AssetPreflightDecision::MissingData,
+        "io" => AssetPreflightDecision::IoBlocked,
+        "export" => AssetPreflightDecision::ExportBlocked,
+        _ => AssetPreflightDecision::Failed,
+    }
+}
+
+fn preflight_quality_report(
+    input_size_bytes: u64,
+    import_check: &crate::inspect::InspectImportCheck,
+) -> Option<AssetQualityReport> {
+    import_check.importable.then(|| {
+        quality_report_from_metrics(AssetQualityMetrics {
+            input_count: 1,
+            successful_count: 1,
+            converted_count: 0,
+            reused_count: 0,
+            checked_count: 1,
+            failed_count: 0,
+            preview_output_count: 0,
+            node_count: import_check.node_count.unwrap_or(0),
+            mesh_count: import_check.mesh_count.unwrap_or(0),
+            primitive_count: import_check.primitive_count.unwrap_or(0),
+            vertex_count: import_check.vertex_count.unwrap_or(0),
+            triangle_count: import_check.triangle_count.unwrap_or(0),
+            input_size_bytes,
+            output_size_bytes: 0,
+            metadata_size_bytes: 0,
+        })
+    })
 }
 
 fn collect_batch_inputs_or_write_failure(

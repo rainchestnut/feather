@@ -3,11 +3,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use feather_lite::{
     ASSET_PACKAGE_CONTRACT_VERSION, AssetConversionError, AssetConversionProfile,
-    AssetConversionRequest, AssetPackageFreshnessReason, AssetPackageStatus, AssetPreflightRequest,
-    AssetPreviewStatus, AssetQualityLevel, BatchAssetConversionRequest, BatchItemStatus,
-    convert_asset, convert_batch_assets, ensure_asset_package, ensure_batch_asset_package,
-    explain_asset_package_freshness, explain_batch_asset_package_freshness,
-    is_asset_package_current, is_batch_asset_package_current, preflight_asset,
+    AssetConversionRequest, AssetPackageFreshnessReason, AssetPackageStatus,
+    AssetPreflightDecision, AssetPreflightRequest, AssetPreviewStatus, AssetQualityLevel,
+    BatchAssetConversionRequest, BatchItemStatus, convert_asset, convert_batch_assets,
+    ensure_asset_package, ensure_batch_asset_package, explain_asset_package_freshness,
+    explain_batch_asset_package_freshness, is_asset_package_current,
+    is_batch_asset_package_current, preflight_asset,
 };
 
 const SAMPLE_CACHE: &str = "\
@@ -365,6 +366,19 @@ fn preflight_asset_returns_business_failure_without_writing_package() {
     assert_eq!(result.source_format, "CATIA_CATPart");
     assert!(!result.importable);
     assert_eq!(
+        result.decision,
+        AssetPreflightDecision::NeedsReadableVisualization
+    );
+    assert_eq!(result.decision.as_str(), "needs_readable_visualization");
+    assert!(result.quality.is_none());
+    assert!(
+        result
+            .required_condition
+            .as_ref()
+            .expect("required condition should be returned")
+            .contains("readable lightweight visualization payload")
+    );
+    assert_eq!(
         result
             .failure
             .as_ref()
@@ -372,6 +386,45 @@ fn preflight_asset_returns_business_failure_without_writing_package() {
             .category,
         "no_readable_lightweight_cache"
     );
+
+    fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
+}
+
+#[test]
+fn preflight_asset_returns_business_ready_decision_and_quality() {
+    let temp_dir = unique_temp_dir("asset-preflight-ready");
+    fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+    let input_path = temp_dir.join("fixture.CATPart");
+    fs::write(
+        &input_path,
+        format!("CATPart private payload prefix\n{SAMPLE_CACHE}\nprivate suffix"),
+    )
+    .expect("fixture should be written");
+
+    let result =
+        preflight_asset(&AssetPreflightRequest::new(&input_path)).expect("preflight should run");
+
+    assert_eq!(result.source_format, "CATIA_CATPart");
+    assert!(result.importable);
+    assert_eq!(result.decision, AssetPreflightDecision::Ready);
+    assert_eq!(result.decision.as_str(), "ready");
+    assert!(result.required_condition.is_none());
+    assert!(result.failure.is_none());
+    assert_eq!(result.node_count, Some(1));
+    assert_eq!(result.mesh_count, Some(1));
+    assert_eq!(result.primitive_count, Some(1));
+    assert_eq!(result.vertex_count, Some(3));
+    assert_eq!(result.triangle_count, Some(1));
+    let quality = result.quality.expect("quality should be returned");
+    assert!(!quality.previewable);
+    assert!(quality.has_visual_geometry);
+    assert_eq!(quality.preview_status, AssetPreviewStatus::NoPreviewOutput);
+    assert_eq!(quality.quality_level, AssetQualityLevel::Light);
+    assert_eq!(quality.checked_count, 1);
+    assert_eq!(quality.converted_count, 0);
+    assert_eq!(quality.triangle_count, 1);
+    assert!(quality.input_size_bytes > 0);
+    assert_eq!(quality.output_size_bytes, 0);
 
     fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
 }

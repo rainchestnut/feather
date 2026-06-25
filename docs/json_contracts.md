@@ -76,7 +76,10 @@ Required `import_check` fields when present:
 - `failure_category`: stable category string or `null`
 - `required_condition`: actionable condition string or `null`
 - `error`: error message or `null`
+- `node_count`: integer or `null`
 - `mesh_count`: integer or `null`
+- `primitive_count`: integer or `null`
+- `vertex_count`: integer or `null`
 - `triangle_count`: integer or `null`
 
 ## `feather.batch-manifest.v1`

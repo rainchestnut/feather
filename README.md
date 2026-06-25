@@ -248,7 +248,9 @@ The main embeddable operations are:
   `AssetConversionProfile`; conversion results include `asset_id`, source
   SHA-256, source byte size, settings fingerprint, and an `AssetQualityReport`
   with preview readiness, geometry size class, aggregate counts, and artifact
-  sizes.
+  sizes. `preflight_asset` performs a real import check without writing
+  artifacts and returns a stable `AssetPreflightDecision`, optional
+  `required_condition`, geometry counts, and preflight quality.
 - `is_asset_package_current`, `is_batch_asset_package_current`,
   `explain_asset_package_freshness`, and
   `explain_batch_asset_package_freshness`: validate that business asset
@@ -354,6 +356,10 @@ such as `requires_visual_payload`, `supports_external_references`,
 adds `failure_stage`, `failure_category`, and `required_condition` fields so
 callers can distinguish missing preview payloads, missing external references,
 unsupported input, and pending tessellation work without scraping error text.
+For library callers, `preflight_asset` exposes the same classification as
+`AssetPreflightDecision` values such as `ready`, `needs_readable_visualization`,
+`needs_external_references`, `needs_upstream_tessellation`,
+`resource_limit_exceeded`, and `unsupported_input`.
 The converter fails explicitly when a file requires B-Rep geometry outside the
 supported planar subset; it does not emit placeholder or partial meshes. `inspect`
 reports discovered lightweight assets, and `inspect --check` performs a real

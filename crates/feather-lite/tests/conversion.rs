@@ -109,6 +109,9 @@ fn inspect_api_reports_probe_assets_and_import_check() {
         "not_decoded"
     );
     assert_eq!(parsed_json["import_check"]["importable"], true);
+    assert_eq!(parsed_json["import_check"]["node_count"], 1);
+    assert_eq!(parsed_json["import_check"]["primitive_count"], 1);
+    assert_eq!(parsed_json["import_check"]["vertex_count"], 3);
     assert_eq!(
         parsed_json["import_check"]["failure_category"],
         serde_json::Value::Null
@@ -124,7 +127,10 @@ fn inspect_api_reports_probe_assets_and_import_check() {
         .import_check
         .expect("check_import should produce import check");
     assert!(import_check.importable);
+    assert_eq!(import_check.node_count, Some(1));
     assert_eq!(import_check.mesh_count, Some(1));
+    assert_eq!(import_check.primitive_count, Some(1));
+    assert_eq!(import_check.vertex_count, Some(3));
     assert_eq!(import_check.triangle_count, Some(1));
     assert_eq!(import_check.failure_category, None);
     assert_eq!(import_check.error, None);

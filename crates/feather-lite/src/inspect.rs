@@ -144,7 +144,10 @@ impl InspectReport {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InspectImportCheck {
     pub importable: bool,
+    pub node_count: Option<usize>,
     pub mesh_count: Option<usize>,
+    pub primitive_count: Option<usize>,
+    pub vertex_count: Option<usize>,
     pub triangle_count: Option<u64>,
     pub failure_stage: Option<&'static str>,
     pub failure_category: Option<&'static str>,
@@ -241,7 +244,10 @@ fn inspect_import_check(
     match validate_imported_input_with_registry(registry, input, options) {
         Ok(summary) => InspectImportCheck {
             importable: true,
+            node_count: Some(summary.node_count),
             mesh_count: Some(summary.mesh_count),
+            primitive_count: Some(summary.primitive_count),
+            vertex_count: Some(summary.vertex_count),
             triangle_count: Some(summary.triangle_count),
             failure_stage: None,
             failure_category: None,
@@ -253,7 +259,10 @@ fn inspect_import_check(
             let failure_category = batch_failure_category("import", &message);
             InspectImportCheck {
                 importable: false,
+                node_count: None,
                 mesh_count: None,
+                primitive_count: None,
+                vertex_count: None,
                 triangle_count: None,
                 failure_stage: Some("import"),
                 failure_category: Some(failure_category),
@@ -273,9 +282,30 @@ fn push_import_check_json(json: &mut String, import_check: &InspectImportCheck) 
         "false"
     });
     json.push_str(",\n");
+    json.push_str("    \"node_count\": ");
+    if let Some(node_count) = import_check.node_count {
+        json.push_str(&node_count.to_string());
+    } else {
+        json.push_str("null");
+    }
+    json.push_str(",\n");
     json.push_str("    \"mesh_count\": ");
     if let Some(mesh_count) = import_check.mesh_count {
         json.push_str(&mesh_count.to_string());
+    } else {
+        json.push_str("null");
+    }
+    json.push_str(",\n");
+    json.push_str("    \"primitive_count\": ");
+    if let Some(primitive_count) = import_check.primitive_count {
+        json.push_str(&primitive_count.to_string());
+    } else {
+        json.push_str("null");
+    }
+    json.push_str(",\n");
+    json.push_str("    \"vertex_count\": ");
+    if let Some(vertex_count) = import_check.vertex_count {
+        json.push_str(&vertex_count.to_string());
     } else {
         json.push_str("null");
     }
