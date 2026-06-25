@@ -149,12 +149,21 @@ fn inspect_and_convert_fixture_from_cli() {
         "{}",
         String::from_utf8_lossy(&convert.stderr)
     );
+    let convert_stdout = String::from_utf8(convert.stdout).expect("stdout should be UTF-8");
+    assert!(convert_stdout.contains("nodes: 1"));
+    assert!(convert_stdout.contains("meshes: 1"));
+    assert!(convert_stdout.contains("primitives: 1"));
+    assert!(convert_stdout.contains("vertices: 4"));
+    assert!(convert_stdout.contains("triangles: 2"));
 
     let glb = fs::read(&output_glb).expect("GLB should be written");
     assert_eq!(&glb[0..4], &0x4654_6C67_u32.to_le_bytes());
 
     let metadata_json = fs::read_to_string(&metadata).expect("metadata should be written");
     assert!(metadata_json.contains("\"source_format\": \"CATIA_CATPart\""));
+    assert!(metadata_json.contains("\"node_count\": 1"));
+    assert!(metadata_json.contains("\"primitive_count\": 1"));
+    assert!(metadata_json.contains("\"vertex_count\": 4"));
     assert!(metadata_json.contains("\"triangle_count\": 2"));
 
     fs::remove_dir_all(temp_dir).expect("temp dir should be removable");

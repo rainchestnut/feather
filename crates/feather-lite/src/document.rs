@@ -145,6 +145,20 @@ impl LiteDocument {
         self.meshes.iter().map(LiteMesh::triangle_count).sum()
     }
 
+    /// Returns the total primitive count across all meshes.
+    pub fn primitive_count(&self) -> usize {
+        self.meshes.iter().map(|mesh| mesh.primitives.len()).sum()
+    }
+
+    /// Returns the total position count across all mesh primitives.
+    pub fn vertex_count(&self) -> usize {
+        self.meshes
+            .iter()
+            .flat_map(|mesh| &mesh.primitives)
+            .map(|primitive| primitive.positions.len())
+            .sum()
+    }
+
     /// Ensures that every mesh is reachable by at least one scene node.
     pub fn add_default_nodes_for_unreferenced_meshes(&mut self) {
         let mut referenced = vec![false; self.meshes.len()];

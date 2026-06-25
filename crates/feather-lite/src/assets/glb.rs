@@ -39,6 +39,38 @@ pub fn import_glb_document(
     mode: &str,
     source_path: Option<&Path>,
 ) -> Result<LiteDocument, ImportError> {
+    import_glb_document_with_node_policy(
+        bytes,
+        source_format,
+        mode,
+        source_path,
+        NodeImportPolicy::AddDefaultNodes,
+    )
+}
+
+/// Imports a GLB payload without repairing missing or unreferenced scene nodes.
+pub(crate) fn import_glb_document_preserving_scene(
+    bytes: &[u8],
+    source_format: &str,
+    mode: &str,
+    source_path: Option<&Path>,
+) -> Result<LiteDocument, ImportError> {
+    import_glb_document_with_node_policy(
+        bytes,
+        source_format,
+        mode,
+        source_path,
+        NodeImportPolicy::PreserveScene,
+    )
+}
+
+fn import_glb_document_with_node_policy(
+    bytes: &[u8],
+    source_format: &str,
+    mode: &str,
+    source_path: Option<&Path>,
+    node_policy: NodeImportPolicy,
+) -> Result<LiteDocument, ImportError> {
     let payload_len = glb_len(bytes).ok_or_else(|| {
         ImportError::InvalidData("input is not a structurally valid GLB 2.0 payload".to_string())
     })?;
@@ -50,7 +82,14 @@ pub fn import_glb_document(
         .as_object()
         .ok_or_else(|| ImportError::InvalidData("GLB JSON root must be an object".to_string()))?;
 
-    import_gltf_root(root, &[chunks.bin], source_format, mode, source_path)
+    import_gltf_root(
+        root,
+        &[chunks.bin],
+        source_format,
+        mode,
+        source_path,
+        node_policy,
+    )
 }
 
 /// External binary buffer made available to a `.gltf` JSON payload.
@@ -94,7 +133,20 @@ pub fn import_gltf_document(
     let buffers = parse_gltf_buffers(root, external_buffers)?;
     let buffer_refs = buffers.iter().map(Vec::as_slice).collect::<Vec<_>>();
 
-    import_gltf_root(root, &buffer_refs, source_format, mode, source_path)
+    import_gltf_root(
+        root,
+        &buffer_refs,
+        source_format,
+        mode,
+        source_path,
+        NodeImportPolicy::AddDefaultNodes,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum NodeImportPolicy {
+    AddDefaultNodes,
+    PreserveScene,
 }
 
 fn import_gltf_root(
@@ -103,6 +155,7 @@ fn import_gltf_root(
     source_format: &str,
     mode: &str,
     source_path: Option<&Path>,
+    node_policy: NodeImportPolicy,
 ) -> Result<LiteDocument, ImportError> {
     let buffer_views = parse_buffer_views(root)?;
     let accessors = parse_accessors(root)?;
@@ -121,7 +174,9 @@ fn import_gltf_root(
     document.materials = materials;
     document.meshes = meshes;
     document.nodes = parse_nodes(root);
-    document.add_default_nodes_for_unreferenced_meshes();
+    if matches!(node_policy, NodeImportPolicy::AddDefaultNodes) {
+        document.add_default_nodes_for_unreferenced_meshes();
+    }
     document.refresh_metadata();
     Ok(document)
 }

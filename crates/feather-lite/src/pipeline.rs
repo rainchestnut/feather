@@ -27,7 +27,10 @@ pub struct ConversionSummary {
     pub source_format: String,
     pub output_path: PathBuf,
     pub metadata_path: Option<PathBuf>,
+    pub node_count: usize,
     pub mesh_count: usize,
+    pub primitive_count: usize,
+    pub vertex_count: usize,
     pub triangle_count: u64,
 }
 
@@ -99,7 +102,7 @@ pub fn convert_path_to_glb(
     }
 
     let glb = export_glb(&document, &options.export)?;
-    validate_glb_payload(&glb)?;
+    let glb_validation = validate_glb_payload(&glb)?;
     fs::write(output_path, glb)?;
 
     let metadata_path = if options.write_metadata {
@@ -117,7 +120,10 @@ pub fn convert_path_to_glb(
         source_format: document.metadata.source_format,
         output_path: output_path.to_path_buf(),
         metadata_path,
-        mesh_count: document.metadata.mesh_count,
-        triangle_count: document.metadata.triangle_count,
+        node_count: glb_validation.node_count,
+        mesh_count: glb_validation.mesh_count,
+        primitive_count: glb_validation.primitive_count,
+        vertex_count: glb_validation.vertex_count,
+        triangle_count: glb_validation.triangle_count,
     })
 }

@@ -4,11 +4,11 @@ use std::borrow::Cow;
 use std::error::Error;
 use std::fmt;
 
-use crate::assets::glb::{import_glb_document, is_exact_glb};
+use crate::assets::glb::{import_glb_document_preserving_scene, is_exact_glb};
 use crate::document::{Aabb, LiteDocument, LitePrimitive, Transform};
 use crate::importer::ImportError;
 use crate::json::escape_json;
-use crate::mesh::validate_document;
+use crate::mesh::validate::{primitive_degenerate_triangle_count, validate_document};
 
 /// Options for writing GLB payloads.
 #[derive(Debug, Clone)]
@@ -54,7 +54,10 @@ impl Error for ExportError {
 /// Summary returned after validating a generated GLB payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GlbValidationSummary {
+    pub node_count: usize,
     pub mesh_count: usize,
+    pub primitive_count: usize,
+    pub vertex_count: usize,
     pub triangle_count: u64,
 }
 
@@ -78,19 +81,111 @@ pub fn validate_glb_payload(bytes: &[u8]) -> Result<GlbValidationSummary, Export
         )));
     }
 
-    let document = import_glb_document(bytes, "GLB", "glb-output-validation", None)
-        .map_err(ExportError::InvalidOutput)?;
+    let document =
+        import_glb_document_preserving_scene(bytes, "GLB", "glb-output-validation", None)
+            .map_err(ExportError::InvalidOutput)?;
     validate_document(&document).map_err(ExportError::InvalidOutput)?;
+    validate_glb_output_document(&document).map_err(ExportError::InvalidOutput)?;
+
+    Ok(GlbValidationSummary {
+        node_count: document.nodes.len(),
+        mesh_count: document.metadata.mesh_count,
+        primitive_count: document.primitive_count(),
+        vertex_count: document.vertex_count(),
+        triangle_count: document.metadata.triangle_count,
+    })
+}
+
+fn validate_glb_output_document(document: &LiteDocument) -> Result<(), ImportError> {
+    if document.nodes.is_empty() {
+        return Err(ImportError::InvalidData(
+            "GLB payload contains no scene nodes".to_string(),
+        ));
+    }
+    if document.meshes.is_empty() {
+        return Err(ImportError::InvalidData(
+            "GLB payload contains no meshes".to_string(),
+        ));
+    }
     if document.metadata.triangle_count == 0 {
-        return Err(ExportError::InvalidOutput(ImportError::InvalidData(
+        return Err(ImportError::InvalidData(
             "GLB payload contains no triangles".to_string(),
+        ));
+    }
+
+    let roots = root_nodes(document);
+    if roots.is_empty() {
+        return Err(ImportError::InvalidData(
+            "GLB payload contains no root scene nodes".to_string(),
+        ));
+    }
+
+    let mut visit_state = vec![NodeVisitState::Unvisited; document.nodes.len()];
+    let mut reachable_meshes = vec![false; document.meshes.len()];
+    for root in roots {
+        validate_scene_node(document, root, &mut visit_state, &mut reachable_meshes)?;
+    }
+    if !reachable_meshes.iter().any(|reachable| *reachable) {
+        return Err(ImportError::InvalidData(
+            "GLB payload scene references no mesh geometry".to_string(),
+        ));
+    }
+    if let Some(mesh_index) = reachable_meshes.iter().position(|reachable| !*reachable) {
+        return Err(ImportError::InvalidData(format!(
+            "GLB payload mesh {mesh_index} is not reachable from scene roots"
         )));
     }
 
-    Ok(GlbValidationSummary {
-        mesh_count: document.metadata.mesh_count,
-        triangle_count: document.metadata.triangle_count,
-    })
+    let degenerate_triangles: u64 = document
+        .meshes
+        .iter()
+        .flat_map(|mesh| &mesh.primitives)
+        .map(primitive_degenerate_triangle_count)
+        .sum();
+    if degenerate_triangles > 0 {
+        return Err(ImportError::InvalidData(format!(
+            "GLB payload contains {degenerate_triangles} degenerate triangles"
+        )));
+    }
+
+    Ok(())
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NodeVisitState {
+    Unvisited,
+    Visiting,
+    Visited,
+}
+
+fn validate_scene_node(
+    document: &LiteDocument,
+    node_index: usize,
+    visit_state: &mut [NodeVisitState],
+    reachable_meshes: &mut [bool],
+) -> Result<(), ImportError> {
+    match visit_state[node_index] {
+        NodeVisitState::Visited => return Ok(()),
+        NodeVisitState::Visiting => {
+            return Err(ImportError::InvalidData(format!(
+                "GLB payload node graph contains a cycle at node {node_index}"
+            )));
+        }
+        NodeVisitState::Unvisited => {}
+    }
+
+    visit_state[node_index] = NodeVisitState::Visiting;
+    let node = &document.nodes[node_index];
+    if let Some(mesh_index) = node.mesh
+        && let Some(reachable) = reachable_meshes.get_mut(mesh_index)
+    {
+        *reachable = true;
+    }
+    for child_index in &node.children {
+        validate_scene_node(document, *child_index, visit_state, reachable_meshes)?;
+    }
+    visit_state[node_index] = NodeVisitState::Visited;
+    Ok(())
 }
 
 #[derive(Default)]

@@ -269,7 +269,10 @@ fn convert(args: &[String]) -> Result<(), String> {
     if let Some(metadata_path) = summary.metadata_path {
         println!("metadata: {}", metadata_path.display());
     }
+    println!("nodes: {}", summary.node_count);
     println!("meshes: {}", summary.mesh_count);
+    println!("primitives: {}", summary.primitive_count);
+    println!("vertices: {}", summary.vertex_count);
     println!("triangles: {}", summary.triangle_count);
     Ok(())
 }

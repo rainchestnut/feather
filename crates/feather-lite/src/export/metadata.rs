@@ -11,7 +11,20 @@ pub fn export_metadata_json(document: &LiteDocument) -> String {
     push_json_string_field(&mut json, "source_format", &metadata.source_format, true);
     push_json_string_field(&mut json, "mode", &metadata.mode, true);
     push_json_string_field(&mut json, "precision", &metadata.precision, true);
+    push_json_number_field(&mut json, "node_count", document.nodes.len() as u64, true);
     push_json_number_field(&mut json, "mesh_count", metadata.mesh_count as u64, true);
+    push_json_number_field(
+        &mut json,
+        "primitive_count",
+        document.primitive_count() as u64,
+        true,
+    );
+    push_json_number_field(
+        &mut json,
+        "vertex_count",
+        document.vertex_count() as u64,
+        true,
+    );
     push_json_number_field(&mut json, "triangle_count", metadata.triangle_count, true);
     push_json_bool_field(&mut json, "has_brep", metadata.has_brep, true);
     push_json_bool_field(&mut json, "brep_preserved", metadata.brep_preserved, true);

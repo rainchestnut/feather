@@ -2039,7 +2039,9 @@ fn imports_native_ap214_planar_brep_box() {
     let glb = export_glb(&document, &GlbExportOptions::default())
         .expect("planar STEP B-Rep should export to GLB");
     let summary = validate_glb_payload(&glb).expect("planar STEP GLB should validate");
+    assert_eq!(summary.node_count, 1);
     assert_eq!(summary.mesh_count, 1);
+    assert_eq!(summary.primitive_count, 2);
     assert_eq!(summary.triangle_count, 12);
 }
 
@@ -3838,7 +3840,10 @@ fn validates_generated_glb_payload_before_accepting_output() {
     let glb = export_glb(&document, &GlbExportOptions::default()).expect("GLB should export");
     let summary = validate_glb_payload(&glb).expect("exported GLB should validate");
 
+    assert_eq!(summary.node_count, 1);
     assert_eq!(summary.mesh_count, 1);
+    assert_eq!(summary.primitive_count, 1);
+    assert_eq!(summary.vertex_count, 4);
     assert_eq!(summary.triangle_count, 2);
 
     let mut trailing_bytes = glb;
@@ -3849,6 +3854,39 @@ fn validates_generated_glb_payload_before_accepting_output() {
         error
             .to_string()
             .contains("GLB payload length does not match its header")
+    );
+}
+
+#[test]
+fn rejects_generated_glb_payload_with_degenerate_triangles() {
+    let mut document = sample_lite_document();
+    document.meshes[0].primitives[0].indices = vec![0, 1, 1];
+    document.refresh_metadata();
+    let glb = export_glb(&document, &GlbExportOptions::default())
+        .expect("structurally valid but degenerate GLB should export");
+
+    let error = validate_glb_payload(&glb).expect_err("degenerate GLB should fail validation");
+    assert!(error.to_string().contains("invalid GLB output"));
+    assert!(
+        error
+            .to_string()
+            .contains("GLB payload contains 1 degenerate triangles")
+    );
+}
+
+#[test]
+fn rejects_generated_glb_payload_without_scene_nodes() {
+    let mut document = sample_lite_document();
+    document.nodes.clear();
+    let glb = export_glb(&document, &GlbExportOptions::default())
+        .expect("structurally valid but scene-less GLB should export");
+
+    let error = validate_glb_payload(&glb).expect_err("scene-less GLB should fail validation");
+    assert!(error.to_string().contains("invalid GLB output"));
+    assert!(
+        error
+            .to_string()
+            .contains("GLB payload contains no scene nodes")
     );
 }
 
