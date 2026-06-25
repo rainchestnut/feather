@@ -97,11 +97,33 @@ Required top-level fields:
 - `summary`: aggregate manifest summary object
 - `items`: array of batch item objects
 
+Required aggregate quality fields in `summary`:
+
+- `total_node_count`: integer across successful converted and checked items
+- `total_mesh_count`: integer across successful converted and checked items
+- `total_primitive_count`: integer across successful converted and checked items
+- `total_vertex_count`: integer across successful converted and checked items
+- `total_triangle_count`: integer across successful converted and checked items
+
 Stable item statuses:
 
 - `ok`: conversion succeeded and output paths/sizes describe written artifacts
 - `checked`: check-only import validation succeeded without writing GLB output
 - `error`: conversion or validation failed for this item
+
+Successful `ok` and `checked` items include quality counts. For `ok` items
+these counts come from validated GLB output; for `checked` items they come from
+the imported IR used by check-only validation, before export-only mesh cleanup.
+
+- `node_count`: integer
+- `mesh_count`: integer
+- `primitive_count`: integer
+- `vertex_count`: integer
+- `triangle_count`: integer
+
+Per-format summary entries include the same successful quality counts as
+`node_count`, `mesh_count`, `primitive_count`, `vertex_count`, and
+`triangle_count`.
 
 Required diagnostic fields for failed items:
 

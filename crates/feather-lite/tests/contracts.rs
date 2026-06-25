@@ -69,6 +69,9 @@ fn core_json_surfaces_emit_contract_versions_and_required_roots() {
     assert_contract_version(&batch, BATCH_MANIFEST_CONTRACT_VERSION);
     assert_eq!(batch["input_count"], 0);
     assert!(batch["summary"].is_object());
+    assert_eq!(batch["summary"]["total_node_count"], 0);
+    assert_eq!(batch["summary"]["total_primitive_count"], 0);
+    assert_eq!(batch["summary"]["total_vertex_count"], 0);
     assert!(batch["items"].is_array());
 
     let cache_report = CacheDumpReport {

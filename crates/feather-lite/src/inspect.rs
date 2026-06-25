@@ -156,7 +156,10 @@ pub struct InspectImportCheck {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportValidationSummary {
     pub source_format: String,
+    pub node_count: usize,
     pub mesh_count: usize,
+    pub primitive_count: usize,
+    pub vertex_count: usize,
     pub triangle_count: u64,
 }
 
@@ -321,9 +324,15 @@ fn validate_imported_input_with_registry(
 ) -> Result<ImportValidationSummary, ImportError> {
     let document = registry.import(input, options)?;
     validate_document(&document)?;
+    let node_count = document.nodes.len();
+    let primitive_count = document.primitive_count();
+    let vertex_count = document.vertex_count();
     Ok(ImportValidationSummary {
         source_format: document.metadata.source_format,
+        node_count,
         mesh_count: document.metadata.mesh_count,
+        primitive_count,
+        vertex_count,
         triangle_count: document.metadata.triangle_count,
     })
 }

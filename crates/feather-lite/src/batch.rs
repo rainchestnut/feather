@@ -169,12 +169,18 @@ pub enum BatchItemStatus {
         metadata_path: Option<String>,
         output_size_bytes: Option<u64>,
         metadata_size_bytes: Option<u64>,
+        node_count: usize,
         mesh_count: usize,
+        primitive_count: usize,
+        vertex_count: usize,
         triangle_count: u64,
     },
     Checked {
         source_format: String,
+        node_count: usize,
         mesh_count: usize,
+        primitive_count: usize,
+        vertex_count: usize,
         triangle_count: u64,
     },
     Error {
@@ -212,6 +218,32 @@ impl BatchItemStatus {
     fn mesh_count(&self) -> usize {
         match self {
             Self::Ok { mesh_count, .. } | Self::Checked { mesh_count, .. } => *mesh_count,
+            Self::Error { .. } => 0,
+        }
+    }
+
+    fn node_count(&self) -> usize {
+        match self {
+            Self::Ok { node_count, .. } | Self::Checked { node_count, .. } => *node_count,
+            Self::Error { .. } => 0,
+        }
+    }
+
+    fn primitive_count(&self) -> usize {
+        match self {
+            Self::Ok {
+                primitive_count, ..
+            }
+            | Self::Checked {
+                primitive_count, ..
+            } => *primitive_count,
+            Self::Error { .. } => 0,
+        }
+    }
+
+    fn vertex_count(&self) -> usize {
+        match self {
+            Self::Ok { vertex_count, .. } | Self::Checked { vertex_count, .. } => *vertex_count,
             Self::Error { .. } => 0,
         }
     }
@@ -336,7 +368,10 @@ pub struct BatchManifestSummary {
     pub total_output_bytes: u64,
     pub total_metadata_bytes: u64,
     pub total_duration_ms: u128,
+    pub total_node_count: usize,
     pub total_mesh_count: usize,
+    pub total_primitive_count: usize,
+    pub total_vertex_count: usize,
     pub total_triangle_count: u64,
     pub formats: Vec<BatchFormatSummary>,
     pub failure_stages: Vec<BatchCountSummary>,
@@ -350,7 +385,10 @@ pub struct BatchFormatSummary {
     pub input_count: usize,
     pub success_count: usize,
     pub failed_count: usize,
+    pub node_count: usize,
     pub mesh_count: usize,
+    pub primitive_count: usize,
+    pub vertex_count: usize,
     pub triangle_count: u64,
 }
 
@@ -366,7 +404,10 @@ struct BatchFormatAccumulator {
     input_count: usize,
     success_count: usize,
     failed_count: usize,
+    node_count: usize,
     mesh_count: usize,
+    primitive_count: usize,
+    vertex_count: usize,
     triangle_count: u64,
 }
 
@@ -548,7 +589,10 @@ fn run_batch_item(
         match validate_batch_input_path(input_path, &options.conversion.import) {
             Ok(summary) => BatchItemStatus::Checked {
                 source_format: summary.source_format,
+                node_count: summary.node_count,
                 mesh_count: summary.mesh_count,
+                primitive_count: summary.primitive_count,
+                vertex_count: summary.vertex_count,
                 triangle_count: summary.triangle_count,
             },
             Err(error) => BatchItemStatus::Error {
@@ -585,7 +629,10 @@ fn run_batch_item(
                     metadata_path,
                     output_size_bytes,
                     metadata_size_bytes,
+                    node_count: summary.node_count,
                     mesh_count: summary.mesh_count,
+                    primitive_count: summary.primitive_count,
+                    vertex_count: summary.vertex_count,
                     triangle_count: summary.triangle_count,
                 }
             }
@@ -697,7 +744,10 @@ fn push_batch_item_json(json: &mut String, item: &BatchItem) {
             metadata_path,
             output_size_bytes,
             metadata_size_bytes,
+            node_count,
             mesh_count,
+            primitive_count,
+            vertex_count,
             triangle_count,
         } => {
             json.push_str("      \"status\": \"ok\",\n");
@@ -726,8 +776,17 @@ fn push_batch_item_json(json: &mut String, item: &BatchItem) {
             json.push_str("      \"metadata_size_bytes\": ");
             push_optional_json_u64(json, *metadata_size_bytes);
             json.push_str(",\n");
+            json.push_str("      \"node_count\": ");
+            json.push_str(&node_count.to_string());
+            json.push_str(",\n");
             json.push_str("      \"mesh_count\": ");
             json.push_str(&mesh_count.to_string());
+            json.push_str(",\n");
+            json.push_str("      \"primitive_count\": ");
+            json.push_str(&primitive_count.to_string());
+            json.push_str(",\n");
+            json.push_str("      \"vertex_count\": ");
+            json.push_str(&vertex_count.to_string());
             json.push_str(",\n");
             json.push_str("      \"triangle_count\": ");
             json.push_str(&triangle_count.to_string());
@@ -735,7 +794,10 @@ fn push_batch_item_json(json: &mut String, item: &BatchItem) {
         }
         BatchItemStatus::Checked {
             source_format,
+            node_count,
             mesh_count,
+            primitive_count,
+            vertex_count,
             triangle_count,
         } => {
             json.push_str("      \"status\": \"checked\",\n");
@@ -750,8 +812,17 @@ fn push_batch_item_json(json: &mut String, item: &BatchItem) {
             json.push_str("      \"metadata_path\": null,\n");
             json.push_str("      \"output_size_bytes\": null,\n");
             json.push_str("      \"metadata_size_bytes\": null,\n");
+            json.push_str("      \"node_count\": ");
+            json.push_str(&node_count.to_string());
+            json.push_str(",\n");
             json.push_str("      \"mesh_count\": ");
             json.push_str(&mesh_count.to_string());
+            json.push_str(",\n");
+            json.push_str("      \"primitive_count\": ");
+            json.push_str(&primitive_count.to_string());
+            json.push_str(",\n");
+            json.push_str("      \"vertex_count\": ");
+            json.push_str(&vertex_count.to_string());
             json.push_str(",\n");
             json.push_str("      \"triangle_count\": ");
             json.push_str(&triangle_count.to_string());
@@ -838,7 +909,10 @@ fn batch_manifest_summary(items: &[BatchItem]) -> BatchManifestSummary {
     let mut total_output_bytes = 0;
     let mut total_metadata_bytes = 0;
     let mut total_duration_ms = 0;
+    let mut total_node_count = 0;
     let mut total_mesh_count = 0;
+    let mut total_primitive_count = 0;
+    let mut total_vertex_count = 0;
     let mut total_triangle_count = 0;
 
     for item in items {
@@ -851,12 +925,21 @@ fn batch_manifest_summary(items: &[BatchItem]) -> BatchManifestSummary {
         format.input_count += 1;
 
         if item.status.is_success() {
+            let node_count = item.status.node_count();
             let mesh_count = item.status.mesh_count();
+            let primitive_count = item.status.primitive_count();
+            let vertex_count = item.status.vertex_count();
             let triangle_count = item.status.triangle_count();
             format.success_count += 1;
+            format.node_count += node_count;
             format.mesh_count += mesh_count;
+            format.primitive_count += primitive_count;
+            format.vertex_count += vertex_count;
             format.triangle_count += triangle_count;
+            total_node_count += node_count;
             total_mesh_count += mesh_count;
+            total_primitive_count += primitive_count;
+            total_vertex_count += vertex_count;
             total_triangle_count += triangle_count;
         } else if let BatchItemStatus::Error { stage, message, .. } = &item.status {
             format.failed_count += 1;
@@ -873,7 +956,10 @@ fn batch_manifest_summary(items: &[BatchItem]) -> BatchManifestSummary {
         total_output_bytes,
         total_metadata_bytes,
         total_duration_ms,
+        total_node_count,
         total_mesh_count,
+        total_primitive_count,
+        total_vertex_count,
         total_triangle_count,
         formats: formats
             .into_iter()
@@ -882,7 +968,10 @@ fn batch_manifest_summary(items: &[BatchItem]) -> BatchManifestSummary {
                 input_count: summary.input_count,
                 success_count: summary.success_count,
                 failed_count: summary.failed_count,
+                node_count: summary.node_count,
                 mesh_count: summary.mesh_count,
+                primitive_count: summary.primitive_count,
+                vertex_count: summary.vertex_count,
                 triangle_count: summary.triangle_count,
             })
             .collect(),
@@ -916,8 +1005,17 @@ fn push_batch_summary_json(json: &mut String, summary: &BatchManifestSummary) {
     json.push_str("    \"total_duration_ms\": ");
     json.push_str(&summary.total_duration_ms.to_string());
     json.push_str(",\n");
+    json.push_str("    \"total_node_count\": ");
+    json.push_str(&summary.total_node_count.to_string());
+    json.push_str(",\n");
     json.push_str("    \"total_mesh_count\": ");
     json.push_str(&summary.total_mesh_count.to_string());
+    json.push_str(",\n");
+    json.push_str("    \"total_primitive_count\": ");
+    json.push_str(&summary.total_primitive_count.to_string());
+    json.push_str(",\n");
+    json.push_str("    \"total_vertex_count\": ");
+    json.push_str(&summary.total_vertex_count.to_string());
     json.push_str(",\n");
     json.push_str("    \"total_triangle_count\": ");
     json.push_str(&summary.total_triangle_count.to_string());
@@ -940,8 +1038,17 @@ fn push_batch_summary_json(json: &mut String, summary: &BatchManifestSummary) {
         json.push_str("        \"failed_count\": ");
         json.push_str(&format.failed_count.to_string());
         json.push_str(",\n");
+        json.push_str("        \"node_count\": ");
+        json.push_str(&format.node_count.to_string());
+        json.push_str(",\n");
         json.push_str("        \"mesh_count\": ");
         json.push_str(&format.mesh_count.to_string());
+        json.push_str(",\n");
+        json.push_str("        \"primitive_count\": ");
+        json.push_str(&format.primitive_count.to_string());
+        json.push_str(",\n");
+        json.push_str("        \"vertex_count\": ");
+        json.push_str(&format.vertex_count.to_string());
         json.push_str(",\n");
         json.push_str("        \"triangle_count\": ");
         json.push_str(&format.triangle_count.to_string());

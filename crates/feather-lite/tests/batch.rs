@@ -37,7 +37,10 @@ fn batch_report_serializes_manifest_summary_and_items() {
                 metadata_path: Some("out/asset_000_part.metadata.json".to_string()),
                 output_size_bytes: Some(80),
                 metadata_size_bytes: Some(24),
+                node_count: 3,
                 mesh_count: 1,
+                primitive_count: 2,
+                vertex_count: 8,
                 triangle_count: 12,
             },
         },
@@ -70,7 +73,10 @@ fn batch_report_serializes_manifest_summary_and_items() {
     assert_eq!(summary.total_input_bytes, 160);
     assert_eq!(summary.total_output_bytes, 80);
     assert_eq!(summary.total_metadata_bytes, 24);
+    assert_eq!(summary.total_node_count, 3);
     assert_eq!(summary.total_mesh_count, 1);
+    assert_eq!(summary.total_primitive_count, 2);
+    assert_eq!(summary.total_vertex_count, 8);
     assert_eq!(summary.total_triangle_count, 12);
     assert_eq!(
         summary.failure_categories[0].name,
@@ -88,7 +94,17 @@ fn batch_report_serializes_manifest_summary_and_items() {
     assert_eq!(parsed_json["input_count"], 2);
     assert_eq!(parsed_json["converted_count"], 1);
     assert_eq!(parsed_json["failed_count"], 1);
+    assert_eq!(parsed_json["summary"]["total_node_count"], 3);
+    assert_eq!(parsed_json["summary"]["total_mesh_count"], 1);
+    assert_eq!(parsed_json["summary"]["total_primitive_count"], 2);
+    assert_eq!(parsed_json["summary"]["total_vertex_count"], 8);
+    assert_eq!(parsed_json["summary"]["total_triangle_count"], 12);
     assert_eq!(parsed_json["items"][0]["status"], "ok");
+    assert_eq!(parsed_json["items"][0]["node_count"], 3);
+    assert_eq!(parsed_json["items"][0]["mesh_count"], 1);
+    assert_eq!(parsed_json["items"][0]["primitive_count"], 2);
+    assert_eq!(parsed_json["items"][0]["vertex_count"], 8);
+    assert_eq!(parsed_json["items"][0]["triangle_count"], 12);
     assert_eq!(
         parsed_json["items"][0]["capability"]["format"],
         "CATIA_CATPart"
@@ -173,7 +189,10 @@ fn batch_preflight_helpers_probe_and_validate_input_paths() {
     let summary = validate_batch_input_path(&input, &ImportOptions::default())
         .expect("batch preflight should validate importable input");
     assert_eq!(summary.source_format, "CATIA_CATPart");
+    assert_eq!(summary.node_count, 1);
     assert_eq!(summary.mesh_count, 1);
+    assert_eq!(summary.primitive_count, 1);
+    assert_eq!(summary.vertex_count, 3);
     assert_eq!(summary.triangle_count, 1);
 
     fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
@@ -298,11 +317,21 @@ fn batch_runner_converts_inputs_and_writes_manifest_from_core_api() {
     let BatchItemStatus::Ok {
         output_path,
         metadata_path,
+        node_count,
+        mesh_count,
+        primitive_count,
+        vertex_count,
+        triangle_count,
         ..
     } = &converted.status
     else {
         panic!("converted item should have ok status");
     };
+    assert_eq!(*node_count, 1);
+    assert_eq!(*mesh_count, 1);
+    assert_eq!(*primitive_count, 1);
+    assert_eq!(*vertex_count, 3);
+    assert_eq!(*triangle_count, 1);
     assert!(std::path::Path::new(output_path).is_file());
     assert!(
         std::path::Path::new(
@@ -322,6 +351,22 @@ fn batch_runner_converts_inputs_and_writes_manifest_from_core_api() {
     );
     assert_eq!(parsed_manifest["converted_count"], 1);
     assert_eq!(parsed_manifest["failed_count"], 1);
+    assert_eq!(parsed_manifest["summary"]["total_node_count"], 1);
+    assert_eq!(parsed_manifest["summary"]["total_mesh_count"], 1);
+    assert_eq!(parsed_manifest["summary"]["total_primitive_count"], 1);
+    assert_eq!(parsed_manifest["summary"]["total_vertex_count"], 3);
+    assert_eq!(parsed_manifest["summary"]["total_triangle_count"], 1);
+    let ok = parsed_manifest["items"]
+        .as_array()
+        .expect("batch items should be an array")
+        .iter()
+        .find(|item| item["status"] == "ok")
+        .expect("one batch item should convert");
+    assert_eq!(ok["node_count"], 1);
+    assert_eq!(ok["mesh_count"], 1);
+    assert_eq!(ok["primitive_count"], 1);
+    assert_eq!(ok["vertex_count"], 3);
+    assert_eq!(ok["triangle_count"], 1);
     assert_eq!(
         parsed_manifest["summary"]["failure_categories"][0]["category"],
         "no_readable_lightweight_cache"

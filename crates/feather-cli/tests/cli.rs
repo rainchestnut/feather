@@ -1385,6 +1385,11 @@ fn batch_converts_directory_and_records_failures_from_cli() {
     assert!(manifest.contains("\"total_output_bytes\":"));
     assert!(manifest.contains("\"total_metadata_bytes\":"));
     assert!(manifest.contains("\"total_duration_ms\":"));
+    assert!(manifest.contains("\"total_node_count\": 2"));
+    assert!(manifest.contains("\"total_mesh_count\": 2"));
+    assert!(manifest.contains("\"total_primitive_count\": 2"));
+    assert!(manifest.contains("\"total_vertex_count\": 8"));
+    assert!(manifest.contains("\"total_triangle_count\": 4"));
     assert!(manifest.contains("\"input_size_bytes\":"));
     assert!(manifest.contains("\"duration_ms\":"));
     assert!(manifest.contains("\"output_size_bytes\":"));
@@ -1406,6 +1411,23 @@ fn batch_converts_directory_and_records_failures_from_cli() {
         manifest_json["contract_version"],
         BATCH_MANIFEST_CONTRACT_VERSION
     );
+    assert_eq!(manifest_json["summary"]["total_node_count"], 2);
+    assert_eq!(manifest_json["summary"]["total_mesh_count"], 2);
+    assert_eq!(manifest_json["summary"]["total_primitive_count"], 2);
+    assert_eq!(manifest_json["summary"]["total_vertex_count"], 8);
+    assert_eq!(manifest_json["summary"]["total_triangle_count"], 4);
+    for ok_item in manifest_json["items"]
+        .as_array()
+        .expect("batch items should be an array")
+        .iter()
+        .filter(|item| item["status"] == "ok")
+    {
+        assert_eq!(ok_item["node_count"], 1);
+        assert_eq!(ok_item["mesh_count"], 1);
+        assert_eq!(ok_item["primitive_count"], 1);
+        assert_eq!(ok_item["vertex_count"], 4);
+        assert_eq!(ok_item["triangle_count"], 2);
+    }
     let failed_item = manifest_json["items"]
         .as_array()
         .expect("batch items should be an array")
@@ -1493,7 +1515,10 @@ END_FEATHER_CAD_LITE_CACHE
     assert!(manifest.contains("\"checked_count\": 1"));
     assert!(manifest.contains("\"failed_count\": 2"));
     assert!(manifest.contains("\"summary\":"));
+    assert!(manifest.contains("\"total_node_count\": 1"));
     assert!(manifest.contains("\"total_mesh_count\": 1"));
+    assert!(manifest.contains("\"total_primitive_count\": 1"));
+    assert!(manifest.contains("\"total_vertex_count\": 6"));
     assert!(manifest.contains("\"total_triangle_count\": 2"));
     assert!(manifest.contains("\"total_input_bytes\":"));
     assert!(manifest.contains("\"total_output_bytes\": 0"));
@@ -1518,7 +1543,10 @@ END_FEATHER_CAD_LITE_CACHE
     assert!(manifest.contains("\"metadata_size_bytes\": null"));
     assert!(manifest.contains("\"importable\": true"));
     assert!(manifest.contains("\"importable\": false"));
+    assert!(manifest.contains("\"node_count\": 1"));
     assert!(manifest.contains("\"mesh_count\": 1"));
+    assert!(manifest.contains("\"primitive_count\": 1"));
+    assert!(manifest.contains("\"vertex_count\": 6"));
     assert!(manifest.contains("\"triangle_count\": 2"));
     assert!(manifest.contains("\"error_stage\": \"import\""));
     assert!(manifest.contains("\"error_category\": \"missing_external_reference\""));
@@ -1527,6 +1555,22 @@ END_FEATHER_CAD_LITE_CACHE
     assert!(manifest.contains("has no readable lightweight visualization cache"));
     let manifest_json: serde_json::Value =
         serde_json::from_str(&manifest).expect("batch check-only manifest should be valid JSON");
+    assert_eq!(manifest_json["summary"]["total_node_count"], 1);
+    assert_eq!(manifest_json["summary"]["total_mesh_count"], 1);
+    assert_eq!(manifest_json["summary"]["total_primitive_count"], 1);
+    assert_eq!(manifest_json["summary"]["total_vertex_count"], 6);
+    assert_eq!(manifest_json["summary"]["total_triangle_count"], 2);
+    let checked_item = manifest_json["items"]
+        .as_array()
+        .expect("batch items should be an array")
+        .iter()
+        .find(|item| item["status"] == "checked")
+        .expect("one batch item should be checked");
+    assert_eq!(checked_item["node_count"], 1);
+    assert_eq!(checked_item["mesh_count"], 1);
+    assert_eq!(checked_item["primitive_count"], 1);
+    assert_eq!(checked_item["vertex_count"], 6);
+    assert_eq!(checked_item["triangle_count"], 2);
     assert!(
         manifest_json["items"]
             .as_array()
