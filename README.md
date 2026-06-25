@@ -155,10 +155,11 @@ integration surface for production code.
 use std::path::{Path, PathBuf};
 
 use feather_lite::{
-    AssetConversionProfile, AssetConversionRequest, BatchConversionOptions,
-    ConversionOptions, InspectOptions, JobConversionSettings, LocalJobStore,
-    ReferencePathMapping, convert_path_to_glb, ensure_asset_package, inspect_path,
-    is_asset_package_current, run_batch_conversion,
+    AssetConversionProfile, AssetConversionRequest, BatchAssetConversionRequest,
+    BatchConversionOptions, ConversionOptions, InspectOptions, JobConversionSettings,
+    LocalJobStore, ReferencePathMapping, convert_path_to_glb, ensure_asset_package,
+    ensure_batch_asset_package, inspect_path, is_asset_package_current,
+    is_batch_asset_package_current, run_batch_conversion,
 };
 
 let inspect = inspect_path(
@@ -204,6 +205,14 @@ println!(
 );
 println!("{}", is_asset_package_current(&asset_request)?);
 
+let batch_asset_request = BatchAssetConversionRequest::new(
+    vec![PathBuf::from("./incoming-cad")],
+    PathBuf::from("./batch-asset-package"),
+);
+let batch_asset = ensure_batch_asset_package(&batch_asset_request)?;
+println!("{}", batch_asset.status.as_str());
+println!("{}", is_batch_asset_package_current(&batch_asset_request)?);
+
 let batch = run_batch_conversion(
     &[PathBuf::from("./incoming-cad")],
     &BatchConversionOptions {
@@ -226,14 +235,14 @@ println!("job {} {}", job.job_id, job.status.as_str());
 
 The main embeddable operations are:
 
-- `ensure_asset_package`, `convert_asset`, `convert_batch_assets`, and
-  `preflight_asset`: business facade APIs that write or reuse a standard
-  artifact package and hide low-level mesh options behind
+- `ensure_asset_package`, `ensure_batch_asset_package`, `convert_asset`,
+  `convert_batch_assets`, and `preflight_asset`: business facade APIs that write
+  or reuse a standard artifact package and hide low-level mesh options behind
   `AssetConversionProfile`; conversion results include `asset_id`, source
   SHA-256, source byte size, and settings fingerprint fields.
-- `is_asset_package_current`: validates that a single-file business asset
-  package still matches the current source hash, source size, and conversion
-  profile.
+- `is_asset_package_current` and `is_batch_asset_package_current`: validate that
+  business asset packages still match the current source hash, source size,
+  conversion profile, and batch mode.
 - `detect_format` and `inspect_path`: probe, asset discovery, and optional real
   import validation.
 - `convert_path_to_glb`: single-file conversion with mesh cleanup, GLB
@@ -371,18 +380,20 @@ forces an attempted conversion for that file.
 
 ## Business Asset Packages
 
-`ensure_asset_package` is the recommended library entry when a business system
-wants an idempotent lightweight package instead of a loose GLB path. It reuses a
-current single-file package and returns `reused`; otherwise it calls
-`convert_asset` and returns `converted`. Use `convert_asset` when the caller
-explicitly wants to force a rewrite.
+`ensure_asset_package` and `ensure_batch_asset_package` are the recommended
+library entries when a business system wants an idempotent lightweight package
+instead of a loose GLB path. They reuse a current package and return `reused`;
+otherwise they call `convert_asset` or `convert_batch_assets` and return
+`converted`. Use the direct conversion functions when the caller explicitly
+wants to force a rewrite.
 Single-file packages contain `model.glb`, `metadata.json`, `source-info.json`,
-and `diagnostics.json`. `convert_batch_assets` writes `manifest.json`,
-`source-info.json`, `diagnostics.json`, and an `outputs` directory. Both package
-metadata files include a deterministic `asset_id`, source SHA-256, source byte
-size, and settings fingerprint so callers can decide whether a package still
-matches the current source and conversion profile. Use
-`is_asset_package_current` for the built-in single-file freshness check.
+and `diagnostics.json`. Batch packages write `manifest.json`,
+`source-info.json`, `diagnostics.json`, and an `outputs` directory; directory
+inputs are expanded to the actual supported file set before identity and
+freshness checks are computed. Both package metadata files include a
+deterministic `asset_id`, source SHA-256, source byte size, and settings
+fingerprint so callers can decide whether a package still matches the current
+source, conversion profile, and batch mode.
 
 ## Local Job Store
 

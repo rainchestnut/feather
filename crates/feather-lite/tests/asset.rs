@@ -4,7 +4,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use feather_lite::{
     ASSET_PACKAGE_CONTRACT_VERSION, AssetConversionError, AssetConversionProfile,
     AssetConversionRequest, AssetPackageStatus, AssetPreflightRequest, BatchAssetConversionRequest,
-    convert_asset, convert_batch_assets, ensure_asset_package, is_asset_package_current,
+    BatchItemStatus, convert_asset, convert_batch_assets, ensure_asset_package,
+    ensure_batch_asset_package, is_asset_package_current, is_batch_asset_package_current,
     preflight_asset,
 };
 
@@ -316,6 +317,157 @@ fn convert_batch_assets_writes_manifest_package() {
         result.settings_fingerprint
     );
     assert_eq!(diagnostics["converted_count"], 1);
+
+    fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
+}
+
+#[test]
+fn convert_batch_assets_expands_directory_inputs_for_package_identity() {
+    let temp_dir = unique_temp_dir("asset-batch-directory");
+    let source_dir = temp_dir.join("incoming");
+    let nested_dir = source_dir.join("nested");
+    fs::create_dir_all(&nested_dir).expect("source dirs should be created");
+    let input_a = source_dir.join("a.CATPart");
+    let input_b = nested_dir.join("b.CATPart");
+    let ignored = source_dir.join("ignore.txt");
+    let output_dir = temp_dir.join("batch-asset");
+    fs::write(
+        &input_a,
+        format!("CATPart private payload A\n{SAMPLE_CACHE}\nprivate suffix"),
+    )
+    .expect("fixture A should be written");
+    fs::write(
+        &input_b,
+        format!("CATPart private payload B\n{SAMPLE_CACHE}\nprivate suffix"),
+    )
+    .expect("fixture B should be written");
+    fs::write(&ignored, "not a supported batch input").expect("ignored file should be written");
+
+    let result = convert_batch_assets(&BatchAssetConversionRequest::new(
+        vec![source_dir.clone()],
+        &output_dir,
+    ))
+    .expect("directory batch asset conversion should succeed");
+
+    assert_eq!(result.report.input_count(), 2);
+    assert_eq!(result.report.converted_count(), 2);
+    let source_info = parse_json(&fs::read_to_string(&result.package.source_info_path).unwrap());
+    assert_eq!(source_info["kind"], "batch_conversion");
+    assert_eq!(
+        source_info["inputs"]
+            .as_array()
+            .expect("inputs array")
+            .len(),
+        2
+    );
+    let source_dir_path = source_dir.display().to_string();
+    assert!(
+        source_info["inputs"]
+            .as_array()
+            .expect("inputs array")
+            .iter()
+            .all(|input| input["path"]
+                .as_str()
+                .expect("input path should be a string")
+                != source_dir_path.as_str())
+    );
+    assert_eq!(
+        source_info["source_size_bytes"]
+            .as_u64()
+            .expect("source size should be an integer"),
+        result.source_size_bytes
+    );
+
+    fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
+}
+
+#[test]
+fn ensure_batch_asset_package_reuses_current_package() {
+    let temp_dir = unique_temp_dir("asset-batch-ensure-reuse");
+    fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+    let input_path = temp_dir.join("fixture.CATPart");
+    let output_dir = temp_dir.join("batch-asset");
+    fs::write(
+        &input_path,
+        format!("CATPart private payload prefix\n{SAMPLE_CACHE}\nprivate suffix"),
+    )
+    .expect("fixture should be written");
+
+    let request = BatchAssetConversionRequest::new(vec![input_path], &output_dir);
+    let first = ensure_batch_asset_package(&request).expect("first ensure should convert");
+    assert_eq!(first.status, AssetPackageStatus::Converted);
+    assert_eq!(first.asset.report.converted_count(), 1);
+    assert!(is_batch_asset_package_current(&request).expect("freshness check should run"));
+
+    let second = ensure_batch_asset_package(&request).expect("second ensure should reuse");
+    assert_eq!(second.status, AssetPackageStatus::Reused);
+    assert_eq!(second.asset.asset_id, first.asset.asset_id);
+    assert_eq!(second.asset.report.converted_count(), 1);
+
+    fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
+}
+
+#[test]
+fn ensure_batch_asset_package_rebuilds_when_source_or_mode_changes() {
+    let temp_dir = unique_temp_dir("asset-batch-ensure-stale");
+    fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+    let input_path = temp_dir.join("fixture.CATPart");
+    let output_dir = temp_dir.join("batch-asset");
+    fs::write(
+        &input_path,
+        format!("CATPart private payload prefix\n{SAMPLE_CACHE}\nprivate suffix"),
+    )
+    .expect("fixture should be written");
+
+    let mut request = BatchAssetConversionRequest::new(vec![input_path.clone()], &output_dir);
+    let first = ensure_batch_asset_package(&request).expect("first ensure should convert");
+    assert_eq!(first.status, AssetPackageStatus::Converted);
+
+    fs::write(
+        &input_path,
+        format!("CATPart private payload changed\n{SAMPLE_CACHE}\nprivate suffix"),
+    )
+    .expect("fixture should be changed");
+    let changed_source =
+        ensure_batch_asset_package(&request).expect("source change should convert");
+    assert_eq!(changed_source.status, AssetPackageStatus::Converted);
+    assert_ne!(changed_source.asset.asset_id, first.asset.asset_id);
+
+    request.check_only = true;
+    let changed_mode = ensure_batch_asset_package(&request).expect("mode change should convert");
+    assert_eq!(changed_mode.status, AssetPackageStatus::Converted);
+    assert_eq!(changed_mode.asset.report.checked_count(), 1);
+    assert_ne!(
+        changed_mode.asset.settings_fingerprint,
+        changed_source.asset.settings_fingerprint
+    );
+
+    fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
+}
+
+#[test]
+fn ensure_batch_asset_package_rebuilds_incomplete_package() {
+    let temp_dir = unique_temp_dir("asset-batch-ensure-incomplete");
+    fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+    let input_path = temp_dir.join("fixture.CATPart");
+    let output_dir = temp_dir.join("batch-asset");
+    fs::write(
+        &input_path,
+        format!("CATPart private payload prefix\n{SAMPLE_CACHE}\nprivate suffix"),
+    )
+    .expect("fixture should be written");
+
+    let request = BatchAssetConversionRequest::new(vec![input_path], &output_dir);
+    let first = ensure_batch_asset_package(&request).expect("first ensure should convert");
+    let output_path = match &first.asset.report.items[0].status {
+        BatchItemStatus::Ok { output_path, .. } => std::path::PathBuf::from(output_path),
+        _ => panic!("batch item should be converted"),
+    };
+    fs::remove_file(&output_path).expect("output should be removable");
+
+    let rebuilt = ensure_batch_asset_package(&request).expect("missing output should convert");
+    assert_eq!(rebuilt.status, AssetPackageStatus::Converted);
+    assert!(output_path.is_file());
 
     fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
 }

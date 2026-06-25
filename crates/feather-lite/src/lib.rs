@@ -52,8 +52,9 @@ pub use asset::{
     AssetConversionError, AssetConversionProfile, AssetConversionRequest, AssetConversionResult,
     AssetFailure, AssetIdentity, AssetOutputPackage, AssetPackageEnsureResult, AssetPackageStatus,
     AssetPreflightRequest, AssetPreflightResult, BatchAssetConversionRequest,
-    BatchAssetConversionResult, convert_asset, convert_batch_assets, ensure_asset_package,
-    is_asset_package_current, preflight_asset,
+    BatchAssetConversionResult, BatchAssetPackageEnsureResult, convert_asset, convert_batch_assets,
+    ensure_asset_package, ensure_batch_asset_package, is_asset_package_current,
+    is_batch_asset_package_current, preflight_asset,
 };
 pub use assets::embedded::{
     EmbeddedVisualAsset, EmbeddedVisualAssetKind, EmbeddedVisualAssetSource,

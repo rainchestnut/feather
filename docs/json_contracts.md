@@ -240,6 +240,7 @@ Emitted by:
 - `convert_asset`
 - `convert_batch_assets`
 - `ensure_asset_package` when the package is stale and conversion runs
+- `ensure_batch_asset_package` when the package is stale and batch conversion runs
 
 Required fields in `source-info.json`:
 
@@ -250,7 +251,8 @@ Required fields in `source-info.json`:
 - `asset_id`: deterministic identifier derived from source hash and settings
 - `source_sha256`: SHA-256 for one source, or aggregate SHA-256 for a batch
 - `source_size_bytes`: source byte size, or total source byte size for a batch
-- `settings_fingerprint`: SHA-256 of profile plus concrete conversion settings
+- `settings_fingerprint`: SHA-256 of profile plus concrete conversion settings;
+  batch packages also include conversion vs check-only mode
 - `inputs`: array of source path, source SHA-256, and source byte size objects
 - `created_at_unix_ms`: integer
 
@@ -278,6 +280,7 @@ Required fields in batch `diagnostics.json`:
 - `source_sha256`: aggregate source SHA-256
 - `source_size_bytes`: total source byte size
 - `settings_fingerprint`: SHA-256 of profile plus concrete conversion settings
+  and conversion vs check-only mode
 - `input_count`, `converted_count`, `checked_count`, `failed_count`: integers
 - `failure`: failure object or `null`
 - `updated_at_unix_ms`: integer
