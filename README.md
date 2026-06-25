@@ -157,8 +157,8 @@ use std::path::{Path, PathBuf};
 use feather_lite::{
     AssetConversionProfile, AssetConversionRequest, BatchConversionOptions,
     ConversionOptions, InspectOptions, JobConversionSettings, LocalJobStore,
-    ReferencePathMapping, convert_asset, convert_path_to_glb, inspect_path,
-    run_batch_conversion,
+    ReferencePathMapping, convert_path_to_glb, ensure_asset_package, inspect_path,
+    is_asset_package_current, run_batch_conversion,
 };
 
 let inspect = inspect_path(
@@ -190,8 +190,19 @@ let mut asset_request = AssetConversionRequest::new(
     PathBuf::from("./asset-package"),
 );
 asset_request.profile = AssetConversionProfile::StandardReview;
-let asset = convert_asset(&asset_request)?;
-println!("{}", asset.package.model_path.unwrap().display());
+let asset = ensure_asset_package(&asset_request)?;
+println!("{}", asset.status.as_str());
+println!(
+    "{}",
+    asset
+        .asset
+        .package
+        .model_path
+        .as_ref()
+        .expect("asset packages reserve model paths")
+        .display()
+);
+println!("{}", is_asset_package_current(&asset_request)?);
 
 let batch = run_batch_conversion(
     &[PathBuf::from("./incoming-cad")],
@@ -215,9 +226,14 @@ println!("job {} {}", job.job_id, job.status.as_str());
 
 The main embeddable operations are:
 
-- `convert_asset`, `convert_batch_assets`, and `preflight_asset`: business
-  facade APIs that write a standard artifact package and hide low-level mesh
-  options behind `AssetConversionProfile`.
+- `ensure_asset_package`, `convert_asset`, `convert_batch_assets`, and
+  `preflight_asset`: business facade APIs that write or reuse a standard
+  artifact package and hide low-level mesh options behind
+  `AssetConversionProfile`; conversion results include `asset_id`, source
+  SHA-256, source byte size, and settings fingerprint fields.
+- `is_asset_package_current`: validates that a single-file business asset
+  package still matches the current source hash, source size, and conversion
+  profile.
 - `detect_format` and `inspect_path`: probe, asset discovery, and optional real
   import validation.
 - `convert_path_to_glb`: single-file conversion with mesh cleanup, GLB
@@ -355,11 +371,18 @@ forces an attempted conversion for that file.
 
 ## Business Asset Packages
 
-`convert_asset` is the recommended library entry when a business system wants a
-complete lightweight package instead of a loose GLB path. Single-file packages
-contain `model.glb`, `metadata.json`, `source-info.json`, and
-`diagnostics.json`. `convert_batch_assets` writes `manifest.json`,
-`source-info.json`, `diagnostics.json`, and an `outputs` directory.
+`ensure_asset_package` is the recommended library entry when a business system
+wants an idempotent lightweight package instead of a loose GLB path. It reuses a
+current single-file package and returns `reused`; otherwise it calls
+`convert_asset` and returns `converted`. Use `convert_asset` when the caller
+explicitly wants to force a rewrite.
+Single-file packages contain `model.glb`, `metadata.json`, `source-info.json`,
+and `diagnostics.json`. `convert_batch_assets` writes `manifest.json`,
+`source-info.json`, `diagnostics.json`, and an `outputs` directory. Both package
+metadata files include a deterministic `asset_id`, source SHA-256, source byte
+size, and settings fingerprint so callers can decide whether a package still
+matches the current source and conversion profile. Use
+`is_asset_package_current` for the built-in single-file freshness check.
 
 ## Local Job Store
 

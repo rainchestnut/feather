@@ -3,8 +3,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use feather_lite::{
     ASSET_PACKAGE_CONTRACT_VERSION, AssetConversionError, AssetConversionProfile,
-    AssetConversionRequest, AssetPreflightRequest, BatchAssetConversionRequest, convert_asset,
-    convert_batch_assets, preflight_asset,
+    AssetConversionRequest, AssetPackageStatus, AssetPreflightRequest, BatchAssetConversionRequest,
+    convert_asset, convert_batch_assets, ensure_asset_package, is_asset_package_current,
+    preflight_asset,
 };
 
 const SAMPLE_CACHE: &str = "\
@@ -74,6 +75,161 @@ fn convert_asset_writes_standard_business_package() {
     );
     assert_eq!(diagnostics["status"], "succeeded");
     assert_eq!(diagnostics["triangle_count"], 1);
+    assert_eq!(
+        result.asset_id,
+        source_info["asset_id"]
+            .as_str()
+            .expect("asset id should be a string")
+    );
+    assert_eq!(
+        result.source_sha256,
+        source_info["source_sha256"]
+            .as_str()
+            .expect("source hash should be a string")
+    );
+    assert_eq!(
+        result.source_size_bytes,
+        source_info["source_size_bytes"]
+            .as_u64()
+            .expect("source size should be an integer")
+    );
+    assert_eq!(
+        result.settings_fingerprint,
+        source_info["settings_fingerprint"]
+            .as_str()
+            .expect("settings fingerprint should be a string")
+    );
+    assert_eq!(
+        result.source_size_bytes,
+        diagnostics["source_size_bytes"]
+            .as_u64()
+            .expect("diagnostic source size should be an integer")
+    );
+    assert!(is_asset_package_current(&request).expect("freshness check should run"));
+
+    fs::write(
+        &input_path,
+        format!("CATPart private payload changed\n{SAMPLE_CACHE}\nprivate suffix"),
+    )
+    .expect("fixture should be changed");
+    assert!(!is_asset_package_current(&request).expect("freshness check should run"));
+
+    fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
+}
+
+#[test]
+fn ensure_asset_package_reuses_current_package() {
+    let temp_dir = unique_temp_dir("asset-ensure-reuse");
+    fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+    let input_path = temp_dir.join("fixture.CATPart");
+    let output_dir = temp_dir.join("asset");
+    fs::write(
+        &input_path,
+        format!("CATPart private payload prefix\n{SAMPLE_CACHE}\nprivate suffix"),
+    )
+    .expect("fixture should be written");
+
+    let request = AssetConversionRequest::new(&input_path, &output_dir);
+    let first = ensure_asset_package(&request).expect("first ensure should convert");
+    assert_eq!(first.status, AssetPackageStatus::Converted);
+    assert_eq!(first.status.as_str(), "converted");
+
+    let second = ensure_asset_package(&request).expect("second ensure should reuse");
+    assert_eq!(second.status, AssetPackageStatus::Reused);
+    assert_eq!(second.status.as_str(), "reused");
+    assert_eq!(second.asset.asset_id, first.asset.asset_id);
+    assert_eq!(second.asset.source_sha256, first.asset.source_sha256);
+    assert_eq!(
+        second.asset.settings_fingerprint,
+        first.asset.settings_fingerprint
+    );
+
+    fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
+}
+
+#[test]
+fn ensure_asset_package_rebuilds_when_source_or_profile_changes() {
+    let temp_dir = unique_temp_dir("asset-ensure-stale");
+    fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+    let input_path = temp_dir.join("fixture.CATPart");
+    let output_dir = temp_dir.join("asset");
+    fs::write(
+        &input_path,
+        format!("CATPart private payload prefix\n{SAMPLE_CACHE}\nprivate suffix"),
+    )
+    .expect("fixture should be written");
+
+    let mut request = AssetConversionRequest::new(&input_path, &output_dir);
+    let first = ensure_asset_package(&request).expect("first ensure should convert");
+    assert_eq!(first.status, AssetPackageStatus::Converted);
+
+    fs::write(
+        &input_path,
+        format!("CATPart private payload changed\n{SAMPLE_CACHE}\nprivate suffix"),
+    )
+    .expect("fixture should be changed");
+    let changed_source = ensure_asset_package(&request).expect("source change should convert");
+    assert_eq!(changed_source.status, AssetPackageStatus::Converted);
+    assert_ne!(changed_source.asset.asset_id, first.asset.asset_id);
+    assert_ne!(
+        changed_source.asset.source_sha256,
+        first.asset.source_sha256
+    );
+
+    request.profile = AssetConversionProfile::HighQuality;
+    let changed_profile = ensure_asset_package(&request).expect("profile change should convert");
+    assert_eq!(changed_profile.status, AssetPackageStatus::Converted);
+    assert_ne!(
+        changed_profile.asset.settings_fingerprint,
+        changed_source.asset.settings_fingerprint
+    );
+
+    fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
+}
+
+#[test]
+fn ensure_asset_package_rebuilds_incomplete_or_failed_package() {
+    let temp_dir = unique_temp_dir("asset-ensure-incomplete");
+    fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+    let input_path = temp_dir.join("fixture.CATPart");
+    let output_dir = temp_dir.join("asset");
+    fs::write(
+        &input_path,
+        format!("CATPart private payload prefix\n{SAMPLE_CACHE}\nprivate suffix"),
+    )
+    .expect("fixture should be written");
+
+    let request = AssetConversionRequest::new(&input_path, &output_dir);
+    let first = ensure_asset_package(&request).expect("first ensure should convert");
+    let model_path = first
+        .asset
+        .package
+        .model_path
+        .as_ref()
+        .expect("model path should be reserved")
+        .clone();
+    fs::remove_file(&model_path).expect("model should be removable");
+
+    let rebuilt = ensure_asset_package(&request).expect("missing model should convert");
+    assert_eq!(rebuilt.status, AssetPackageStatus::Converted);
+    assert!(model_path.is_file());
+
+    let diagnostics_path = rebuilt.asset.package.diagnostics_path.clone();
+    let mut diagnostics = parse_json(&fs::read_to_string(&diagnostics_path).unwrap());
+    diagnostics["status"] = serde_json::Value::String("failed".to_string());
+    fs::write(
+        &diagnostics_path,
+        serde_json::to_string_pretty(&diagnostics).expect("diagnostics should serialize"),
+    )
+    .expect("diagnostics should be writable");
+
+    let after_failed_diagnostics =
+        ensure_asset_package(&request).expect("failed diagnostics should convert");
+    assert_eq!(
+        after_failed_diagnostics.status,
+        AssetPackageStatus::Converted
+    );
+    assert!(is_asset_package_current(&request).expect("freshness check should run"));
 
     fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
 }
@@ -135,6 +291,30 @@ fn convert_batch_assets_writes_manifest_package() {
     let diagnostics = parse_json(&fs::read_to_string(&result.package.diagnostics_path).unwrap());
     assert_eq!(diagnostics["status"], "succeeded");
     assert_eq!(diagnostics["profile"], "mobile_preview");
+    assert_eq!(
+        diagnostics["asset_id"]
+            .as_str()
+            .expect("asset id should be a string"),
+        result.asset_id
+    );
+    assert_eq!(
+        diagnostics["source_sha256"]
+            .as_str()
+            .expect("source hash should be a string"),
+        result.source_sha256
+    );
+    assert_eq!(
+        diagnostics["source_size_bytes"]
+            .as_u64()
+            .expect("source size should be an integer"),
+        result.source_size_bytes
+    );
+    assert_eq!(
+        diagnostics["settings_fingerprint"]
+            .as_str()
+            .expect("settings fingerprint should be a string"),
+        result.settings_fingerprint
+    );
     assert_eq!(diagnostics["converted_count"], 1);
 
     fs::remove_dir_all(temp_dir).expect("temp dir should be removable");

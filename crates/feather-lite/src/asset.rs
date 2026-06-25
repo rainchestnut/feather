@@ -4,10 +4,13 @@ use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::io;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use serde::Deserialize;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 use crate::atomic_write::write_atomic;
 use crate::batch::{
@@ -156,8 +159,17 @@ pub struct AssetOutputPackage {
     pub diagnostics_path: PathBuf,
 }
 
+/// Stable identity for one source or source set under a conversion profile.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssetIdentity {
+    pub asset_id: String,
+    pub source_sha256: String,
+    pub source_size_bytes: u64,
+    pub settings_fingerprint: String,
+}
+
 /// Structured failure returned by business conversion APIs.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssetFailure {
     pub stage: String,
     pub category: String,
@@ -169,6 +181,10 @@ pub struct AssetFailure {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssetConversionResult {
     pub package: AssetOutputPackage,
+    pub asset_id: String,
+    pub source_sha256: String,
+    pub source_size_bytes: u64,
+    pub settings_fingerprint: String,
     pub source_format: String,
     pub node_count: usize,
     pub mesh_count: usize,
@@ -181,7 +197,35 @@ pub struct AssetConversionResult {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BatchAssetConversionResult {
     pub package: AssetOutputPackage,
+    pub asset_id: String,
+    pub source_sha256: String,
+    pub source_size_bytes: u64,
+    pub settings_fingerprint: String,
     pub report: BatchReport,
+}
+
+/// How `ensure_asset_package` satisfied a single-source asset package request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssetPackageStatus {
+    Converted,
+    Reused,
+}
+
+impl AssetPackageStatus {
+    /// Returns the stable lowercase status label for logs or API responses.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Converted => "converted",
+            Self::Reused => "reused",
+        }
+    }
+}
+
+/// Result returned by `ensure_asset_package`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssetPackageEnsureResult {
+    pub status: AssetPackageStatus,
+    pub asset: AssetConversionResult,
 }
 
 /// Lightweight preflight result for business callers.
@@ -262,10 +306,17 @@ pub fn convert_asset(
         &request.reference_path_mappings,
         request.limits,
     );
+    let source = source_identity(&request.input_path)?;
+    let identity = identity_from_parts(
+        std::slice::from_ref(&source),
+        request.profile.label(),
+        &settings,
+    );
     write_source_info(
         &package,
         request.profile.label(),
-        std::slice::from_ref(&request.input_path),
+        std::slice::from_ref(&source),
+        &identity,
         "conversion",
     )?;
 
@@ -280,11 +331,13 @@ pub fn convert_asset(
         &settings.to_conversion_options(metadata_path),
     ) {
         Ok(summary) => {
-            let result = AssetConversionResult::from_summary(package.clone(), summary);
+            let result =
+                AssetConversionResult::from_summary(package.clone(), identity.clone(), summary);
             write_diagnostics(
                 &package,
                 request.profile.label(),
                 "succeeded",
+                &identity,
                 Some(&result),
                 None,
             )?;
@@ -296,6 +349,7 @@ pub fn convert_asset(
                 &package,
                 request.profile.label(),
                 "failed",
+                &identity,
                 None,
                 Some(&failure),
             );
@@ -327,10 +381,13 @@ pub fn convert_batch_assets(
         &request.reference_path_mappings,
         request.limits,
     );
+    let input_identities = source_identities(&request.input_paths)?;
+    let identity = identity_from_parts(&input_identities, request.profile.label(), &settings);
     write_source_info(
         &package,
         request.profile.label(),
-        &request.input_paths,
+        &input_identities,
+        &identity,
         "batch_conversion",
     )?;
 
@@ -347,6 +404,10 @@ pub fn convert_batch_assets(
         Ok(report) => {
             let result = BatchAssetConversionResult {
                 package: package.clone(),
+                asset_id: identity.asset_id.clone(),
+                source_sha256: identity.source_sha256.clone(),
+                source_size_bytes: identity.source_size_bytes,
+                settings_fingerprint: identity.settings_fingerprint.clone(),
                 report: report.report,
             };
             let failed_count = result.report.failed_count();
@@ -356,6 +417,7 @@ pub fn convert_batch_assets(
                     request.profile.label(),
                     "succeeded",
                     &result,
+                    &identity,
                     None,
                 )?;
                 Ok(result)
@@ -371,6 +433,7 @@ pub fn convert_batch_assets(
                     request.profile.label(),
                     "failed",
                     &result,
+                    &identity,
                     Some(&failure),
                 );
                 Err(AssetConversionError::BatchFailed {
@@ -385,6 +448,7 @@ pub fn convert_batch_assets(
                 &package,
                 request.profile.label(),
                 "failed",
+                Some(&identity),
                 &failure,
             );
             Err(AssetConversionError::BatchFailed {
@@ -444,10 +508,154 @@ pub fn preflight_asset(
     })
 }
 
+/// Reuses a current single-file package, or converts the source when it is stale.
+pub fn ensure_asset_package(
+    request: &AssetConversionRequest,
+) -> Result<AssetPackageEnsureResult, AssetConversionError> {
+    if let Some(asset) = current_asset_result(request)? {
+        return Ok(AssetPackageEnsureResult {
+            status: AssetPackageStatus::Reused,
+            asset,
+        });
+    }
+
+    Ok(AssetPackageEnsureResult {
+        status: AssetPackageStatus::Converted,
+        asset: convert_asset(request)?,
+    })
+}
+
+/// Returns true when an existing single-file asset package matches this request.
+pub fn is_asset_package_current(
+    request: &AssetConversionRequest,
+) -> Result<bool, AssetConversionError> {
+    Ok(current_asset_result(request)?.is_some())
+}
+
+fn current_asset_result(
+    request: &AssetConversionRequest,
+) -> Result<Option<AssetConversionResult>, AssetConversionError> {
+    let package = single_asset_package(&request.output_dir);
+    if !package.source_info_path.is_file() || !package.diagnostics_path.is_file() {
+        return Ok(None);
+    }
+    if !package
+        .model_path
+        .as_ref()
+        .expect("single asset package reserves model path")
+        .is_file()
+    {
+        return Ok(None);
+    }
+    if !package
+        .metadata_path
+        .as_ref()
+        .expect("single asset package reserves metadata path")
+        .is_file()
+    {
+        return Ok(None);
+    }
+
+    let settings = settings_for_asset_request(
+        &request.profile,
+        &request.resolve_dirs,
+        &request.reference_path_mappings,
+        request.limits,
+    );
+    let source = source_identity(&request.input_path)?;
+    let identity = identity_from_parts(
+        std::slice::from_ref(&source),
+        request.profile.label(),
+        &settings,
+    );
+    let source_info: AssetSourceInfoJson = read_json(&package.source_info_path)?;
+    let diagnostics: AssetDiagnosticsJson = read_json(&package.diagnostics_path)?;
+
+    if !single_asset_metadata_matches(
+        &source_info,
+        &diagnostics,
+        &source,
+        &identity,
+        request.profile.label(),
+    ) {
+        return Ok(None);
+    }
+
+    let (
+        Some(source_format),
+        Some(node_count),
+        Some(mesh_count),
+        Some(primitive_count),
+        Some(vertex_count),
+        Some(triangle_count),
+    ) = (
+        diagnostics.source_format,
+        diagnostics.node_count,
+        diagnostics.mesh_count,
+        diagnostics.primitive_count,
+        diagnostics.vertex_count,
+        diagnostics.triangle_count,
+    )
+    else {
+        return Ok(None);
+    };
+
+    Ok(Some(AssetConversionResult {
+        package,
+        asset_id: identity.asset_id,
+        source_sha256: identity.source_sha256,
+        source_size_bytes: identity.source_size_bytes,
+        settings_fingerprint: identity.settings_fingerprint,
+        source_format,
+        node_count,
+        mesh_count,
+        primitive_count,
+        vertex_count,
+        triangle_count,
+    }))
+}
+
+fn single_asset_metadata_matches(
+    source_info: &AssetSourceInfoJson,
+    diagnostics: &AssetDiagnosticsJson,
+    source: &SourceIdentity,
+    identity: &AssetIdentity,
+    profile: &str,
+) -> bool {
+    let input_matches = source_info.inputs.len() == 1
+        && source_info.inputs[0].path.as_path() == source.path.as_path()
+        && source_info.inputs[0].source_sha256 == source.source_sha256
+        && source_info.inputs[0].source_size_bytes == source.source_size_bytes;
+
+    source_info.contract_version == ASSET_PACKAGE_CONTRACT_VERSION
+        && source_info.kind == "conversion"
+        && source_info.profile == profile
+        && source_info.asset_id == identity.asset_id
+        && source_info.source_sha256 == identity.source_sha256
+        && source_info.source_size_bytes == identity.source_size_bytes
+        && source_info.settings_fingerprint == identity.settings_fingerprint
+        && input_matches
+        && diagnostics.contract_version == ASSET_PACKAGE_CONTRACT_VERSION
+        && diagnostics.status == "succeeded"
+        && diagnostics.profile == profile
+        && diagnostics.asset_id == identity.asset_id
+        && diagnostics.source_sha256 == identity.source_sha256
+        && diagnostics.source_size_bytes == identity.source_size_bytes
+        && diagnostics.settings_fingerprint == identity.settings_fingerprint
+}
+
 impl AssetConversionResult {
-    fn from_summary(package: AssetOutputPackage, summary: ConversionSummary) -> Self {
+    fn from_summary(
+        package: AssetOutputPackage,
+        identity: AssetIdentity,
+        summary: ConversionSummary,
+    ) -> Self {
         Self {
             package,
+            asset_id: identity.asset_id,
+            source_sha256: identity.source_sha256,
+            source_size_bytes: identity.source_size_bytes,
+            settings_fingerprint: identity.settings_fingerprint,
             source_format: summary.source_format,
             node_count: summary.node_count,
             mesh_count: summary.mesh_count,
@@ -544,6 +752,116 @@ fn batch_asset_package(output_dir: &Path) -> AssetOutputPackage {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct SourceIdentity {
+    path: PathBuf,
+    source_sha256: String,
+    source_size_bytes: u64,
+}
+
+fn identity_from_parts(
+    sources: &[SourceIdentity],
+    profile: &str,
+    settings: &JobConversionSettings,
+) -> AssetIdentity {
+    let source_sha256 = aggregate_source_sha256(sources);
+    let source_size_bytes = sources.iter().map(|source| source.source_size_bytes).sum();
+    let settings_fingerprint = conversion_settings_fingerprint(profile, settings);
+    let mut hasher = Sha256::new();
+    hasher.update(ASSET_PACKAGE_CONTRACT_VERSION.as_bytes());
+    hasher.update(b"\0asset\0");
+    hasher.update(source_sha256.as_bytes());
+    hasher.update(b"\0settings\0");
+    hasher.update(settings_fingerprint.as_bytes());
+    let digest = hasher.finalize();
+    let asset_id = format!("asset-{}", hex_digest(&digest));
+    AssetIdentity {
+        asset_id,
+        source_sha256,
+        source_size_bytes,
+        settings_fingerprint,
+    }
+}
+
+fn source_identities(paths: &[PathBuf]) -> Result<Vec<SourceIdentity>, AssetConversionError> {
+    paths
+        .iter()
+        .map(|path| source_identity(path))
+        .collect::<Result<Vec<_>, _>>()
+}
+
+fn source_identity(path: &Path) -> Result<SourceIdentity, AssetConversionError> {
+    let mut file = fs::File::open(path).map_err(|source| AssetConversionError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let mut hasher = Sha256::new();
+    let mut size = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read_len = file
+            .read(&mut buffer)
+            .map_err(|source| AssetConversionError::Io {
+                path: path.to_path_buf(),
+                source,
+            })?;
+        if read_len == 0 {
+            break;
+        }
+        size += read_len as u64;
+        hasher.update(&buffer[..read_len]);
+    }
+    Ok(SourceIdentity {
+        path: path.to_path_buf(),
+        source_sha256: {
+            let digest = hasher.finalize();
+            hex_digest(&digest)
+        },
+        source_size_bytes: size,
+    })
+}
+
+fn aggregate_source_sha256(sources: &[SourceIdentity]) -> String {
+    if sources.len() == 1 {
+        return sources[0].source_sha256.clone();
+    }
+
+    let mut hasher = Sha256::new();
+    hasher.update(ASSET_PACKAGE_CONTRACT_VERSION.as_bytes());
+    hasher.update(b"\0sources\0");
+    for source in sources {
+        hasher.update(source.source_sha256.as_bytes());
+        hasher.update(b"\0");
+        hasher.update(source.source_size_bytes.to_le_bytes());
+        hasher.update(b"\0");
+    }
+    let digest = hasher.finalize();
+    hex_digest(&digest)
+}
+
+fn conversion_settings_fingerprint(profile: &str, settings: &JobConversionSettings) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(ASSET_PACKAGE_CONTRACT_VERSION.as_bytes());
+    hasher.update(b"\0profile\0");
+    hasher.update(profile.as_bytes());
+    hasher.update(b"\0settings\0");
+    let settings_json =
+        serde_json::to_vec(settings).expect("asset conversion settings should serialize");
+    hasher.update(settings_json);
+    let digest = hasher.finalize();
+    hex_digest(&digest)
+}
+
+fn hex_digest(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output
+}
+
 fn ensure_dir(path: &Path) -> Result<(), AssetConversionError> {
     fs::create_dir_all(path).map_err(|source| AssetConversionError::Io {
         path: path.to_path_buf(),
@@ -551,36 +869,54 @@ fn ensure_dir(path: &Path) -> Result<(), AssetConversionError> {
     })
 }
 
-#[derive(Serialize)]
-struct AssetSourceInfoJson<'a> {
-    contract_version: &'static str,
-    kind: &'a str,
-    profile: &'a str,
+#[derive(Serialize, Deserialize)]
+struct AssetSourceInfoJson {
+    contract_version: String,
+    kind: String,
+    profile: String,
+    #[serde(default)]
+    asset_id: String,
+    #[serde(default)]
+    source_sha256: String,
+    #[serde(default)]
+    source_size_bytes: u64,
+    #[serde(default)]
+    settings_fingerprint: String,
+    #[serde(default)]
     inputs: Vec<AssetSourceInputJson>,
     created_at_unix_ms: u64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct AssetSourceInputJson {
     path: PathBuf,
-    size_bytes: Option<u64>,
+    #[serde(default)]
+    source_sha256: String,
+    #[serde(default)]
+    source_size_bytes: u64,
 }
 
 fn write_source_info(
     package: &AssetOutputPackage,
     profile: &str,
-    input_paths: &[PathBuf],
+    sources: &[SourceIdentity],
+    identity: &AssetIdentity,
     kind: &str,
 ) -> Result<(), AssetConversionError> {
     let source_info = AssetSourceInfoJson {
-        contract_version: ASSET_PACKAGE_CONTRACT_VERSION,
-        kind,
-        profile,
-        inputs: input_paths
+        contract_version: ASSET_PACKAGE_CONTRACT_VERSION.to_string(),
+        kind: kind.to_string(),
+        profile: profile.to_string(),
+        asset_id: identity.asset_id.clone(),
+        source_sha256: identity.source_sha256.clone(),
+        source_size_bytes: identity.source_size_bytes,
+        settings_fingerprint: identity.settings_fingerprint.clone(),
+        inputs: sources
             .iter()
-            .map(|path| AssetSourceInputJson {
-                path: path.clone(),
-                size_bytes: file_size(path),
+            .map(|source| AssetSourceInputJson {
+                path: source.path.clone(),
+                source_sha256: source.source_sha256.clone(),
+                source_size_bytes: source.source_size_bytes,
             })
             .collect(),
         created_at_unix_ms: unix_timestamp_millis(),
@@ -588,18 +924,26 @@ fn write_source_info(
     write_json(&package.source_info_path, &source_info)
 }
 
-#[derive(Serialize)]
-struct AssetDiagnosticsJson<'a> {
-    contract_version: &'static str,
-    status: &'a str,
-    profile: &'a str,
-    source_format: Option<&'a str>,
+#[derive(Serialize, Deserialize)]
+struct AssetDiagnosticsJson {
+    contract_version: String,
+    status: String,
+    profile: String,
+    #[serde(default)]
+    asset_id: String,
+    #[serde(default)]
+    source_sha256: String,
+    #[serde(default)]
+    source_size_bytes: u64,
+    #[serde(default)]
+    settings_fingerprint: String,
+    source_format: Option<String>,
     node_count: Option<usize>,
     mesh_count: Option<usize>,
     primitive_count: Option<usize>,
     vertex_count: Option<usize>,
     triangle_count: Option<u64>,
-    failure: Option<&'a AssetFailure>,
+    failure: Option<AssetFailure>,
     updated_at_unix_ms: u64,
 }
 
@@ -607,20 +951,25 @@ fn write_diagnostics(
     package: &AssetOutputPackage,
     profile: &str,
     status: &str,
+    identity: &AssetIdentity,
     result: Option<&AssetConversionResult>,
     failure: Option<&AssetFailure>,
 ) -> Result<(), AssetConversionError> {
     let diagnostics = AssetDiagnosticsJson {
-        contract_version: ASSET_PACKAGE_CONTRACT_VERSION,
-        status,
-        profile,
-        source_format: result.map(|result| result.source_format.as_str()),
+        contract_version: ASSET_PACKAGE_CONTRACT_VERSION.to_string(),
+        status: status.to_string(),
+        profile: profile.to_string(),
+        asset_id: identity.asset_id.clone(),
+        source_sha256: identity.source_sha256.clone(),
+        source_size_bytes: identity.source_size_bytes,
+        settings_fingerprint: identity.settings_fingerprint.clone(),
+        source_format: result.map(|result| result.source_format.clone()),
         node_count: result.map(|result| result.node_count),
         mesh_count: result.map(|result| result.mesh_count),
         primitive_count: result.map(|result| result.primitive_count),
         vertex_count: result.map(|result| result.vertex_count),
         triangle_count: result.map(|result| result.triangle_count),
-        failure,
+        failure: failure.cloned(),
         updated_at_unix_ms: unix_timestamp_millis(),
     };
     write_json(&package.diagnostics_path, &diagnostics)
@@ -631,6 +980,10 @@ struct BatchAssetDiagnosticsJson<'a> {
     contract_version: &'static str,
     status: &'a str,
     profile: &'a str,
+    asset_id: &'a str,
+    source_sha256: &'a str,
+    source_size_bytes: u64,
+    settings_fingerprint: &'a str,
     input_count: usize,
     converted_count: usize,
     checked_count: usize,
@@ -644,12 +997,17 @@ fn write_batch_diagnostics(
     profile: &str,
     status: &str,
     result: &BatchAssetConversionResult,
+    identity: &AssetIdentity,
     failure: Option<&AssetFailure>,
 ) -> Result<(), AssetConversionError> {
     let diagnostics = BatchAssetDiagnosticsJson {
         contract_version: ASSET_PACKAGE_CONTRACT_VERSION,
         status,
         profile,
+        asset_id: &identity.asset_id,
+        source_sha256: &identity.source_sha256,
+        source_size_bytes: identity.source_size_bytes,
+        settings_fingerprint: &identity.settings_fingerprint,
         input_count: result.report.input_count(),
         converted_count: result.report.converted_count(),
         checked_count: result.report.checked_count(),
@@ -664,12 +1022,25 @@ fn write_failure_only_diagnostics(
     package: &AssetOutputPackage,
     profile: &str,
     status: &str,
+    identity: Option<&AssetIdentity>,
     failure: &AssetFailure,
 ) -> Result<(), AssetConversionError> {
     let diagnostics = BatchAssetDiagnosticsJson {
         contract_version: ASSET_PACKAGE_CONTRACT_VERSION,
         status,
         profile,
+        asset_id: identity
+            .map(|identity| identity.asset_id.as_str())
+            .unwrap_or(""),
+        source_sha256: identity
+            .map(|identity| identity.source_sha256.as_str())
+            .unwrap_or(""),
+        source_size_bytes: identity
+            .map(|identity| identity.source_size_bytes)
+            .unwrap_or(0),
+        settings_fingerprint: identity
+            .map(|identity| identity.settings_fingerprint.as_str())
+            .unwrap_or(""),
         input_count: 0,
         converted_count: 0,
         checked_count: 0,
@@ -693,16 +1064,25 @@ fn write_json(path: &Path, value: &impl Serialize) -> Result<(), AssetConversion
     })
 }
 
+fn read_json<T>(path: &Path) -> Result<T, AssetConversionError>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    let bytes = fs::read(path).map_err(|source| AssetConversionError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    serde_json::from_slice(&bytes).map_err(|source| AssetConversionError::Json {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
 fn retryable_failure(category: &str) -> bool {
     matches!(
         category,
         "io" | "missing_external_reference" | "resource_limit_exceeded" | "batch_item_failed"
     )
-}
-
-fn file_size(path: &Path) -> Option<u64> {
-    let metadata = fs::metadata(path).ok()?;
-    metadata.is_file().then_some(metadata.len())
 }
 
 fn unix_timestamp_millis() -> u64 {

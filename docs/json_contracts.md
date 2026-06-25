@@ -239,6 +239,7 @@ Emitted by:
 
 - `convert_asset`
 - `convert_batch_assets`
+- `ensure_asset_package` when the package is stale and conversion runs
 
 Required fields in `source-info.json`:
 
@@ -246,7 +247,11 @@ Required fields in `source-info.json`:
 - `kind`: `conversion` or `batch_conversion`
 - `profile`: profile label such as `mobile_preview`, `web_preview`,
   `standard_review`, `high_quality`, or `custom`
-- `inputs`: array of source path and optional file size objects
+- `asset_id`: deterministic identifier derived from source hash and settings
+- `source_sha256`: SHA-256 for one source, or aggregate SHA-256 for a batch
+- `source_size_bytes`: source byte size, or total source byte size for a batch
+- `settings_fingerprint`: SHA-256 of profile plus concrete conversion settings
+- `inputs`: array of source path, source SHA-256, and source byte size objects
 - `created_at_unix_ms`: integer
 
 Required fields in single conversion `diagnostics.json`:
@@ -254,6 +259,10 @@ Required fields in single conversion `diagnostics.json`:
 - `contract_version`: always `feather.asset-package.v1`
 - `status`: `succeeded` or `failed`
 - `profile`: profile label
+- `asset_id`: deterministic identifier derived from source hash and settings
+- `source_sha256`: SHA-256 for the source
+- `source_size_bytes`: source byte size
+- `settings_fingerprint`: SHA-256 of profile plus concrete conversion settings
 - `source_format`: converted format label or `null`
 - `node_count`, `mesh_count`, `primitive_count`, `vertex_count`,
   `triangle_count`: quality counts or `null`
@@ -265,6 +274,10 @@ Required fields in batch `diagnostics.json`:
 - `contract_version`: always `feather.asset-package.v1`
 - `status`: `succeeded` or `failed`
 - `profile`: profile label
+- `asset_id`: deterministic identifier derived from source hashes and settings
+- `source_sha256`: aggregate source SHA-256
+- `source_size_bytes`: total source byte size
+- `settings_fingerprint`: SHA-256 of profile plus concrete conversion settings
 - `input_count`, `converted_count`, `checked_count`, `failed_count`: integers
 - `failure`: failure object or `null`
 - `updated_at_unix_ms`: integer

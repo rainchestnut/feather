@@ -50,9 +50,10 @@ mod json;
 
 pub use asset::{
     AssetConversionError, AssetConversionProfile, AssetConversionRequest, AssetConversionResult,
-    AssetFailure, AssetOutputPackage, AssetPreflightRequest, AssetPreflightResult,
-    BatchAssetConversionRequest, BatchAssetConversionResult, convert_asset, convert_batch_assets,
-    preflight_asset,
+    AssetFailure, AssetIdentity, AssetOutputPackage, AssetPackageEnsureResult, AssetPackageStatus,
+    AssetPreflightRequest, AssetPreflightResult, BatchAssetConversionRequest,
+    BatchAssetConversionResult, convert_asset, convert_batch_assets, ensure_asset_package,
+    is_asset_package_current, preflight_asset,
 };
 pub use assets::embedded::{
     EmbeddedVisualAsset, EmbeddedVisualAssetKind, EmbeddedVisualAssetSource,
