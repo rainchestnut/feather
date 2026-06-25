@@ -205,6 +205,7 @@ println!(
         .display()
 );
 println!("{}", is_asset_package_current(&asset_request)?);
+println!("{}", asset.asset.quality.preview_status.as_str());
 let freshness = explain_asset_package_freshness(&asset_request)?;
 println!("{}", freshness.reason.as_str());
 
@@ -215,6 +216,7 @@ let batch_asset_request = BatchAssetConversionRequest::new(
 let batch_asset = ensure_batch_asset_package(&batch_asset_request)?;
 println!("{}", batch_asset.status.as_str());
 println!("{}", is_batch_asset_package_current(&batch_asset_request)?);
+println!("{}", batch_asset.asset.quality.quality_level.as_str());
 let batch_freshness = explain_batch_asset_package_freshness(&batch_asset_request)?;
 println!("{}", batch_freshness.reason.as_str());
 
@@ -244,7 +246,9 @@ The main embeddable operations are:
   `convert_batch_assets`, and `preflight_asset`: business facade APIs that write
   or reuse a standard artifact package and hide low-level mesh options behind
   `AssetConversionProfile`; conversion results include `asset_id`, source
-  SHA-256, source byte size, and settings fingerprint fields.
+  SHA-256, source byte size, settings fingerprint, and an `AssetQualityReport`
+  with preview readiness, geometry size class, aggregate counts, and artifact
+  sizes.
 - `is_asset_package_current`, `is_batch_asset_package_current`,
   `explain_asset_package_freshness`, and
   `explain_batch_asset_package_freshness`: validate that business asset
@@ -404,6 +408,13 @@ freshness checks are computed. Both package metadata files include a
 deterministic `asset_id`, source SHA-256, source byte size, and settings
 fingerprint so callers can decide whether a package still matches the current
 source, conversion profile, and batch mode.
+Successful asset results also expose `quality`, a business-level
+`AssetQualityReport`. `preview_status` is `ready`, `no_visual_geometry`,
+`no_preview_output`, or `partial_failure`; `quality_level` is `empty`, `light`,
+`medium`, `heavy`, or `oversized` using the same triangle budgets as the built
+in profiles (`50k`, `150k`, and `500k`). Batch check-only runs can have visual
+geometry counts while still reporting `no_preview_output` because they do not
+write GLB preview artifacts.
 For UI, logs, or orchestration code that needs more than a boolean,
 `explain_asset_package_freshness` and
 `explain_batch_asset_package_freshness` return `AssetPackageFreshness` with a

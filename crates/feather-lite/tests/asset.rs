@@ -4,10 +4,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use feather_lite::{
     ASSET_PACKAGE_CONTRACT_VERSION, AssetConversionError, AssetConversionProfile,
     AssetConversionRequest, AssetPackageFreshnessReason, AssetPackageStatus, AssetPreflightRequest,
-    BatchAssetConversionRequest, BatchItemStatus, convert_asset, convert_batch_assets,
-    ensure_asset_package, ensure_batch_asset_package, explain_asset_package_freshness,
-    explain_batch_asset_package_freshness, is_asset_package_current,
-    is_batch_asset_package_current, preflight_asset,
+    AssetPreviewStatus, AssetQualityLevel, BatchAssetConversionRequest, BatchItemStatus,
+    convert_asset, convert_batch_assets, ensure_asset_package, ensure_batch_asset_package,
+    explain_asset_package_freshness, explain_batch_asset_package_freshness,
+    is_asset_package_current, is_batch_asset_package_current, preflight_asset,
 };
 
 const SAMPLE_CACHE: &str = "\
@@ -43,6 +43,19 @@ fn convert_asset_writes_standard_business_package() {
 
     assert_eq!(result.source_format, "CATIA_CATPart");
     assert_eq!(result.triangle_count, 1);
+    assert!(result.quality.previewable);
+    assert!(result.quality.has_visual_geometry);
+    assert_eq!(result.quality.preview_status, AssetPreviewStatus::Ready);
+    assert_eq!(result.quality.preview_status.as_str(), "ready");
+    assert_eq!(result.quality.quality_level, AssetQualityLevel::Light);
+    assert_eq!(result.quality.quality_level.as_str(), "light");
+    assert_eq!(result.quality.input_count, 1);
+    assert_eq!(result.quality.successful_count, 1);
+    assert_eq!(result.quality.converted_count, 1);
+    assert_eq!(result.quality.triangle_count, 1);
+    assert!(result.quality.input_size_bytes > 0);
+    assert!(result.quality.output_size_bytes > 0);
+    assert!(result.quality.metadata_size_bytes > 0);
     assert!(
         result
             .package
@@ -77,6 +90,10 @@ fn convert_asset_writes_standard_business_package() {
     );
     assert_eq!(diagnostics["status"], "succeeded");
     assert_eq!(diagnostics["triangle_count"], 1);
+    assert_eq!(diagnostics["quality"]["previewable"], true);
+    assert_eq!(diagnostics["quality"]["preview_status"], "ready");
+    assert_eq!(diagnostics["quality"]["quality_level"], "light");
+    assert_eq!(diagnostics["quality"]["triangle_count"], 1);
     assert_eq!(
         result.asset_id,
         source_info["asset_id"]
@@ -141,6 +158,7 @@ fn ensure_asset_package_reuses_current_package() {
     assert_eq!(second.status.as_str(), "reused");
     assert_eq!(second.asset.asset_id, first.asset.asset_id);
     assert_eq!(second.asset.source_sha256, first.asset.source_sha256);
+    assert_eq!(second.asset.quality, first.asset.quality);
     assert_eq!(
         second.asset.settings_fingerprint,
         first.asset.settings_fingerprint
@@ -376,6 +394,18 @@ fn convert_batch_assets_writes_manifest_package() {
 
     assert_eq!(result.report.input_count(), 1);
     assert_eq!(result.report.converted_count(), 1);
+    assert!(result.quality.previewable);
+    assert_eq!(result.quality.preview_status, AssetPreviewStatus::Ready);
+    assert_eq!(result.quality.quality_level, AssetQualityLevel::Light);
+    assert_eq!(result.quality.input_count, 1);
+    assert_eq!(result.quality.successful_count, 1);
+    assert_eq!(result.quality.converted_count, 1);
+    assert_eq!(result.quality.checked_count, 0);
+    assert_eq!(result.quality.failed_count, 0);
+    assert_eq!(result.quality.triangle_count, 1);
+    assert!(result.quality.input_size_bytes > 0);
+    assert!(result.quality.output_size_bytes > 0);
+    assert!(result.quality.metadata_size_bytes > 0);
     assert!(
         result
             .package
@@ -415,6 +445,10 @@ fn convert_batch_assets_writes_manifest_package() {
         result.settings_fingerprint
     );
     assert_eq!(diagnostics["converted_count"], 1);
+    assert_eq!(diagnostics["quality"]["preview_status"], "ready");
+    assert_eq!(diagnostics["quality"]["quality_level"], "light");
+    assert_eq!(diagnostics["quality"]["converted_count"], 1);
+    assert_eq!(diagnostics["quality"]["triangle_count"], 1);
 
     fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
 }
@@ -535,6 +569,13 @@ fn ensure_batch_asset_package_rebuilds_when_source_or_mode_changes() {
     let changed_mode = ensure_batch_asset_package(&request).expect("mode change should convert");
     assert_eq!(changed_mode.status, AssetPackageStatus::Converted);
     assert_eq!(changed_mode.asset.report.checked_count(), 1);
+    assert!(!changed_mode.asset.quality.previewable);
+    assert_eq!(
+        changed_mode.asset.quality.preview_status,
+        AssetPreviewStatus::NoPreviewOutput
+    );
+    assert_eq!(changed_mode.asset.quality.checked_count, 1);
+    assert_eq!(changed_mode.asset.quality.output_size_bytes, 0);
     assert_ne!(
         changed_mode.asset.settings_fingerprint,
         changed_source.asset.settings_fingerprint

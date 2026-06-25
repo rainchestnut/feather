@@ -25,6 +25,10 @@ use crate::inspect::{InspectError, InspectOptions, inspect_path};
 use crate::jobs::{JobConversionSettings, JobImportLimits, JobReferencePathMapping};
 use crate::pipeline::{ConversionError, ConversionSummary, convert_path_to_glb};
 
+const LIGHT_TRIANGLE_LIMIT: u64 = 50_000;
+const MEDIUM_TRIANGLE_LIMIT: u64 = 150_000;
+const HEAVY_TRIANGLE_LIMIT: u64 = 500_000;
+
 /// Business profile used to select conversion quality without exposing low-level knobs.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub enum AssetConversionProfile {
@@ -187,6 +191,7 @@ pub struct AssetConversionResult {
     pub source_sha256: String,
     pub source_size_bytes: u64,
     pub settings_fingerprint: String,
+    pub quality: AssetQualityReport,
     pub source_format: String,
     pub node_count: usize,
     pub mesh_count: usize,
@@ -203,7 +208,77 @@ pub struct BatchAssetConversionResult {
     pub source_sha256: String,
     pub source_size_bytes: u64,
     pub settings_fingerprint: String,
+    pub quality: AssetQualityReport,
     pub report: BatchReport,
+}
+
+/// Business quality summary derived from converted or checked geometry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssetQualityReport {
+    pub previewable: bool,
+    pub has_visual_geometry: bool,
+    pub preview_status: AssetPreviewStatus,
+    pub quality_level: AssetQualityLevel,
+    pub input_count: usize,
+    pub successful_count: usize,
+    pub converted_count: usize,
+    pub reused_count: usize,
+    pub checked_count: usize,
+    pub failed_count: usize,
+    pub node_count: usize,
+    pub mesh_count: usize,
+    pub primitive_count: usize,
+    pub vertex_count: usize,
+    pub triangle_count: u64,
+    pub input_size_bytes: u64,
+    pub output_size_bytes: u64,
+    pub metadata_size_bytes: u64,
+}
+
+/// Preview readiness for a successful quality report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssetPreviewStatus {
+    Ready,
+    NoVisualGeometry,
+    NoPreviewOutput,
+    PartialFailure,
+}
+
+impl AssetPreviewStatus {
+    /// Returns the stable lowercase status label for API responses and logs.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::NoVisualGeometry => "no_visual_geometry",
+            Self::NoPreviewOutput => "no_preview_output",
+            Self::PartialFailure => "partial_failure",
+        }
+    }
+}
+
+/// Geometry size class aligned with the built-in business profiles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssetQualityLevel {
+    Empty,
+    Light,
+    Medium,
+    Heavy,
+    Oversized,
+}
+
+impl AssetQualityLevel {
+    /// Returns the stable lowercase level label for API responses and logs.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Empty => "empty",
+            Self::Light => "light",
+            Self::Medium => "medium",
+            Self::Heavy => "heavy",
+            Self::Oversized => "oversized",
+        }
+    }
 }
 
 /// How an ensure-style asset package API satisfied a package request.
@@ -605,6 +680,7 @@ fn batch_asset_result_from_report(
         source_sha256: identity.source_sha256.clone(),
         source_size_bytes: identity.source_size_bytes,
         settings_fingerprint: identity.settings_fingerprint.clone(),
+        quality: batch_quality_report(&report),
         report,
     };
     let failed_count = result.report.failed_count();
@@ -829,6 +905,24 @@ fn inspect_current_asset_package(
             AssetPackageFreshnessReason::IncompleteDiagnostics,
         ));
     };
+    let model_path = package
+        .model_path
+        .as_ref()
+        .expect("single asset package reserves model path");
+    let metadata_path = package
+        .metadata_path
+        .as_ref()
+        .expect("single asset package reserves metadata path");
+    let quality = single_quality_report(SingleQualityInput {
+        input_size_bytes: identity.source_size_bytes,
+        node_count,
+        mesh_count,
+        primitive_count,
+        vertex_count,
+        triangle_count,
+        output_path: model_path,
+        metadata_path: Some(metadata_path.as_path()),
+    });
 
     Ok((
         AssetPackageFreshness::current(),
@@ -838,6 +932,7 @@ fn inspect_current_asset_package(
             source_sha256: identity.source_sha256,
             source_size_bytes: identity.source_size_bytes,
             settings_fingerprint: identity.settings_fingerprint,
+            quality,
             source_format,
             node_count,
             mesh_count,
@@ -931,6 +1026,7 @@ fn inspect_current_batch_asset_package(
             source_sha256: identity.source_sha256,
             source_size_bytes: identity.source_size_bytes,
             settings_fingerprint: identity.settings_fingerprint,
+            quality: batch_quality_report(&report),
             report,
         }),
     ))
@@ -1092,18 +1188,147 @@ fn source_info_inputs_match(inputs: &[AssetSourceInputJson], sources: &[SourceId
         })
 }
 
+#[derive(Debug, Clone)]
+struct AssetQualityMetrics {
+    input_count: usize,
+    successful_count: usize,
+    converted_count: usize,
+    reused_count: usize,
+    checked_count: usize,
+    failed_count: usize,
+    preview_output_count: usize,
+    node_count: usize,
+    mesh_count: usize,
+    primitive_count: usize,
+    vertex_count: usize,
+    triangle_count: u64,
+    input_size_bytes: u64,
+    output_size_bytes: u64,
+    metadata_size_bytes: u64,
+}
+
+struct SingleQualityInput<'a> {
+    input_size_bytes: u64,
+    node_count: usize,
+    mesh_count: usize,
+    primitive_count: usize,
+    vertex_count: usize,
+    triangle_count: u64,
+    output_path: &'a Path,
+    metadata_path: Option<&'a Path>,
+}
+
+fn single_quality_report(input: SingleQualityInput<'_>) -> AssetQualityReport {
+    quality_report_from_metrics(AssetQualityMetrics {
+        input_count: 1,
+        successful_count: 1,
+        converted_count: 1,
+        reused_count: 0,
+        checked_count: 0,
+        failed_count: 0,
+        preview_output_count: usize::from(input.output_path.is_file()),
+        node_count: input.node_count,
+        mesh_count: input.mesh_count,
+        primitive_count: input.primitive_count,
+        vertex_count: input.vertex_count,
+        triangle_count: input.triangle_count,
+        input_size_bytes: input.input_size_bytes,
+        output_size_bytes: file_size(input.output_path).unwrap_or(0),
+        metadata_size_bytes: input.metadata_path.and_then(file_size).unwrap_or(0),
+    })
+}
+
+fn batch_quality_report(report: &BatchReport) -> AssetQualityReport {
+    let summary = report.summary();
+    quality_report_from_metrics(AssetQualityMetrics {
+        input_count: report.input_count(),
+        successful_count: report.success_count(),
+        converted_count: report.converted_count(),
+        reused_count: report.reused_count(),
+        checked_count: report.checked_count(),
+        failed_count: report.failed_count(),
+        preview_output_count: report.converted_count() + report.reused_count(),
+        node_count: summary.total_node_count,
+        mesh_count: summary.total_mesh_count,
+        primitive_count: summary.total_primitive_count,
+        vertex_count: summary.total_vertex_count,
+        triangle_count: summary.total_triangle_count,
+        input_size_bytes: summary.total_input_bytes,
+        output_size_bytes: summary.total_output_bytes,
+        metadata_size_bytes: summary.total_metadata_bytes,
+    })
+}
+
+fn quality_report_from_metrics(metrics: AssetQualityMetrics) -> AssetQualityReport {
+    let has_visual_geometry = metrics.mesh_count > 0
+        && metrics.primitive_count > 0
+        && metrics.vertex_count > 0
+        && metrics.triangle_count > 0;
+    let preview_status = if metrics.failed_count > 0 {
+        AssetPreviewStatus::PartialFailure
+    } else if !has_visual_geometry {
+        AssetPreviewStatus::NoVisualGeometry
+    } else if metrics.preview_output_count == 0 {
+        AssetPreviewStatus::NoPreviewOutput
+    } else {
+        AssetPreviewStatus::Ready
+    };
+
+    AssetQualityReport {
+        previewable: preview_status == AssetPreviewStatus::Ready,
+        has_visual_geometry,
+        preview_status,
+        quality_level: quality_level_for_triangles(metrics.triangle_count),
+        input_count: metrics.input_count,
+        successful_count: metrics.successful_count,
+        converted_count: metrics.converted_count,
+        reused_count: metrics.reused_count,
+        checked_count: metrics.checked_count,
+        failed_count: metrics.failed_count,
+        node_count: metrics.node_count,
+        mesh_count: metrics.mesh_count,
+        primitive_count: metrics.primitive_count,
+        vertex_count: metrics.vertex_count,
+        triangle_count: metrics.triangle_count,
+        input_size_bytes: metrics.input_size_bytes,
+        output_size_bytes: metrics.output_size_bytes,
+        metadata_size_bytes: metrics.metadata_size_bytes,
+    }
+}
+
+fn quality_level_for_triangles(triangle_count: u64) -> AssetQualityLevel {
+    match triangle_count {
+        0 => AssetQualityLevel::Empty,
+        1..=LIGHT_TRIANGLE_LIMIT => AssetQualityLevel::Light,
+        _ if triangle_count <= MEDIUM_TRIANGLE_LIMIT => AssetQualityLevel::Medium,
+        _ if triangle_count <= HEAVY_TRIANGLE_LIMIT => AssetQualityLevel::Heavy,
+        _ => AssetQualityLevel::Oversized,
+    }
+}
+
 impl AssetConversionResult {
     fn from_summary(
         package: AssetOutputPackage,
         identity: AssetIdentity,
         summary: ConversionSummary,
     ) -> Self {
+        let quality = single_quality_report(SingleQualityInput {
+            input_size_bytes: identity.source_size_bytes,
+            node_count: summary.node_count,
+            mesh_count: summary.mesh_count,
+            primitive_count: summary.primitive_count,
+            vertex_count: summary.vertex_count,
+            triangle_count: summary.triangle_count,
+            output_path: &summary.output_path,
+            metadata_path: summary.metadata_path.as_deref(),
+        });
         Self {
             package,
             asset_id: identity.asset_id,
             source_sha256: identity.source_sha256,
             source_size_bytes: identity.source_size_bytes,
             settings_fingerprint: identity.settings_fingerprint,
+            quality,
             source_format: summary.source_format,
             node_count: summary.node_count,
             mesh_count: summary.mesh_count,
@@ -1662,6 +1887,7 @@ struct AssetDiagnosticsJson {
     primitive_count: Option<usize>,
     vertex_count: Option<usize>,
     triangle_count: Option<u64>,
+    quality: Option<AssetQualityReport>,
     failure: Option<AssetFailure>,
     updated_at_unix_ms: u64,
 }
@@ -1688,6 +1914,7 @@ fn write_diagnostics(
         primitive_count: result.map(|result| result.primitive_count),
         vertex_count: result.map(|result| result.vertex_count),
         triangle_count: result.map(|result| result.triangle_count),
+        quality: result.map(|result| result.quality.clone()),
         failure: failure.cloned(),
         updated_at_unix_ms: unix_timestamp_millis(),
     };
@@ -1713,6 +1940,7 @@ struct BatchAssetDiagnosticsJson {
     reused_count: usize,
     checked_count: usize,
     failed_count: usize,
+    quality: Option<AssetQualityReport>,
     failure: Option<AssetFailure>,
     updated_at_unix_ms: u64,
 }
@@ -1738,6 +1966,7 @@ fn write_batch_diagnostics(
         reused_count: result.report.reused_count(),
         checked_count: result.report.checked_count(),
         failed_count: result.report.failed_count(),
+        quality: Some(result.quality.clone()),
         failure: failure.cloned(),
         updated_at_unix_ms: unix_timestamp_millis(),
     };
@@ -1772,6 +2001,7 @@ fn write_failure_only_diagnostics(
         reused_count: 0,
         checked_count: 0,
         failed_count: 0,
+        quality: None,
         failure: Some(failure.clone()),
         updated_at_unix_ms: unix_timestamp_millis(),
     };

@@ -295,6 +295,7 @@ Required fields in single conversion `diagnostics.json`:
 - `source_format`: converted format label or `null`
 - `node_count`, `mesh_count`, `primitive_count`, `vertex_count`,
   `triangle_count`: quality counts or `null`
+- `quality`: business quality object for succeeded conversions, or `null`
 - `failure`: failure object or `null`
 - `updated_at_unix_ms`: integer
 
@@ -310,8 +311,24 @@ Required fields in batch `diagnostics.json`:
   and conversion vs check-only mode
 - `input_count`, `converted_count`, `reused_count`, `checked_count`,
   `failed_count`: integers
+- `quality`: business quality object for succeeded batch conversions or checks,
+  or `null`
 - `failure`: failure object or `null`
 - `updated_at_unix_ms`: integer
+
+When present, `quality` includes:
+
+- `previewable`: boolean
+- `has_visual_geometry`: boolean
+- `preview_status`: `ready`, `no_visual_geometry`, `no_preview_output`, or
+  `partial_failure`
+- `quality_level`: `empty`, `light`, `medium`, `heavy`, or `oversized`
+- `input_count`, `successful_count`, `converted_count`, `reused_count`,
+  `checked_count`, `failed_count`: integer counts
+- `node_count`, `mesh_count`, `primitive_count`, `vertex_count`,
+  `triangle_count`: aggregate geometry counts
+- `input_size_bytes`, `output_size_bytes`, `metadata_size_bytes`: aggregate
+  byte counts
 
 When present, `failure` includes stable `stage`, `category`, `message`, and
 `retryable` fields.
