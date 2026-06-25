@@ -223,6 +223,80 @@ impl AssetPackageStatus {
     }
 }
 
+/// Reuse diagnostic for an existing business asset package.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssetPackageFreshness {
+    pub current: bool,
+    pub reason: AssetPackageFreshnessReason,
+}
+
+impl AssetPackageFreshness {
+    /// Creates a current freshness result.
+    pub fn current() -> Self {
+        Self {
+            current: true,
+            reason: AssetPackageFreshnessReason::Current,
+        }
+    }
+
+    /// Creates a stale freshness result with the first blocking reason.
+    pub fn stale(reason: AssetPackageFreshnessReason) -> Self {
+        Self {
+            current: false,
+            reason,
+        }
+    }
+}
+
+/// Stable reason codes explaining why a package can or cannot be reused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssetPackageFreshnessReason {
+    Current,
+    MissingSourceInfo,
+    MissingDiagnostics,
+    MissingModel,
+    MissingMetadata,
+    MissingManifest,
+    MissingBatchOutputDirectory,
+    EmptyBatchInputSet,
+    SourceChanged,
+    SettingsChanged,
+    PackageContractMismatch,
+    PackageKindMismatch,
+    SourceInfoMismatch,
+    DiagnosticsFailed,
+    DiagnosticsMismatch,
+    ManifestMismatch,
+    OutputArtifactMissing,
+    IncompleteDiagnostics,
+}
+
+impl AssetPackageFreshnessReason {
+    /// Returns the stable lowercase reason label for API responses and logs.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Current => "current",
+            Self::MissingSourceInfo => "missing_source_info",
+            Self::MissingDiagnostics => "missing_diagnostics",
+            Self::MissingModel => "missing_model",
+            Self::MissingMetadata => "missing_metadata",
+            Self::MissingManifest => "missing_manifest",
+            Self::MissingBatchOutputDirectory => "missing_batch_output_directory",
+            Self::EmptyBatchInputSet => "empty_batch_input_set",
+            Self::SourceChanged => "source_changed",
+            Self::SettingsChanged => "settings_changed",
+            Self::PackageContractMismatch => "package_contract_mismatch",
+            Self::PackageKindMismatch => "package_kind_mismatch",
+            Self::SourceInfoMismatch => "source_info_mismatch",
+            Self::DiagnosticsFailed => "diagnostics_failed",
+            Self::DiagnosticsMismatch => "diagnostics_mismatch",
+            Self::ManifestMismatch => "manifest_mismatch",
+            Self::OutputArtifactMissing => "output_artifact_missing",
+            Self::IncompleteDiagnostics => "incomplete_diagnostics",
+        }
+    }
+}
+
 /// Result returned by `ensure_asset_package`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssetPackageEnsureResult {
@@ -646,22 +720,51 @@ pub fn ensure_batch_asset_package(
 pub fn is_asset_package_current(
     request: &AssetConversionRequest,
 ) -> Result<bool, AssetConversionError> {
-    Ok(current_asset_result(request)?.is_some())
+    Ok(explain_asset_package_freshness(request)?.current)
 }
 
 /// Returns true when an existing batch asset package matches this request.
 pub fn is_batch_asset_package_current(
     request: &BatchAssetConversionRequest,
 ) -> Result<bool, AssetConversionError> {
-    Ok(current_batch_asset_result(request)?.is_some())
+    Ok(explain_batch_asset_package_freshness(request)?.current)
+}
+
+/// Explains whether an existing single-file asset package matches this request.
+pub fn explain_asset_package_freshness(
+    request: &AssetConversionRequest,
+) -> Result<AssetPackageFreshness, AssetConversionError> {
+    Ok(inspect_current_asset_package(request)?.0)
+}
+
+/// Explains whether an existing batch asset package matches this request.
+pub fn explain_batch_asset_package_freshness(
+    request: &BatchAssetConversionRequest,
+) -> Result<AssetPackageFreshness, AssetConversionError> {
+    Ok(inspect_current_batch_asset_package(request)?.0)
 }
 
 fn current_asset_result(
     request: &AssetConversionRequest,
 ) -> Result<Option<AssetConversionResult>, AssetConversionError> {
+    Ok(inspect_current_asset_package(request)?.1)
+}
+
+fn current_batch_asset_result(
+    request: &BatchAssetConversionRequest,
+) -> Result<Option<BatchAssetConversionResult>, AssetConversionError> {
+    Ok(inspect_current_batch_asset_package(request)?.1)
+}
+
+fn inspect_current_asset_package(
+    request: &AssetConversionRequest,
+) -> Result<(AssetPackageFreshness, Option<AssetConversionResult>), AssetConversionError> {
     let package = single_asset_package(&request.output_dir);
-    if !package.source_info_path.is_file() || !package.diagnostics_path.is_file() {
-        return Ok(None);
+    if !package.source_info_path.is_file() {
+        return Ok(stale_asset(AssetPackageFreshnessReason::MissingSourceInfo));
+    }
+    if !package.diagnostics_path.is_file() {
+        return Ok(stale_asset(AssetPackageFreshnessReason::MissingDiagnostics));
     }
     if !package
         .model_path
@@ -669,7 +772,7 @@ fn current_asset_result(
         .expect("single asset package reserves model path")
         .is_file()
     {
-        return Ok(None);
+        return Ok(stale_asset(AssetPackageFreshnessReason::MissingModel));
     }
     if !package
         .metadata_path
@@ -677,7 +780,7 @@ fn current_asset_result(
         .expect("single asset package reserves metadata path")
         .is_file()
     {
-        return Ok(None);
+        return Ok(stale_asset(AssetPackageFreshnessReason::MissingMetadata));
     }
 
     let settings = settings_for_asset_request(
@@ -696,14 +799,14 @@ fn current_asset_result(
     let source_info: AssetSourceInfoJson = read_json(&package.source_info_path)?;
     let diagnostics: AssetDiagnosticsJson = read_json(&package.diagnostics_path)?;
 
-    if !single_asset_metadata_matches(
+    if let Some(reason) = single_asset_metadata_mismatch_reason(
         &source_info,
         &diagnostics,
         &source,
         &identity,
         request.profile.label(),
     ) {
-        return Ok(None);
+        return Ok(stale_asset(reason));
     }
 
     let (
@@ -722,27 +825,32 @@ fn current_asset_result(
         diagnostics.triangle_count,
     )
     else {
-        return Ok(None);
+        return Ok(stale_asset(
+            AssetPackageFreshnessReason::IncompleteDiagnostics,
+        ));
     };
 
-    Ok(Some(AssetConversionResult {
-        package,
-        asset_id: identity.asset_id,
-        source_sha256: identity.source_sha256,
-        source_size_bytes: identity.source_size_bytes,
-        settings_fingerprint: identity.settings_fingerprint,
-        source_format,
-        node_count,
-        mesh_count,
-        primitive_count,
-        vertex_count,
-        triangle_count,
-    }))
+    Ok((
+        AssetPackageFreshness::current(),
+        Some(AssetConversionResult {
+            package,
+            asset_id: identity.asset_id,
+            source_sha256: identity.source_sha256,
+            source_size_bytes: identity.source_size_bytes,
+            settings_fingerprint: identity.settings_fingerprint,
+            source_format,
+            node_count,
+            mesh_count,
+            primitive_count,
+            vertex_count,
+            triangle_count,
+        }),
+    ))
 }
 
-fn current_batch_asset_result(
+fn inspect_current_batch_asset_package(
     request: &BatchAssetConversionRequest,
-) -> Result<Option<BatchAssetConversionResult>, AssetConversionError> {
+) -> Result<(AssetPackageFreshness, Option<BatchAssetConversionResult>), AssetConversionError> {
     let package = batch_asset_package(&request.output_dir);
     let batch_output_dir = package
         .batch_output_dir
@@ -752,12 +860,19 @@ fn current_batch_asset_result(
         .manifest_path
         .as_ref()
         .expect("batch asset package reserves manifest path");
-    if !package.source_info_path.is_file()
-        || !package.diagnostics_path.is_file()
-        || !manifest_path.is_file()
-        || !batch_output_dir.is_dir()
-    {
-        return Ok(None);
+    if !package.source_info_path.is_file() {
+        return Ok(stale_batch(AssetPackageFreshnessReason::MissingSourceInfo));
+    }
+    if !package.diagnostics_path.is_file() {
+        return Ok(stale_batch(AssetPackageFreshnessReason::MissingDiagnostics));
+    }
+    if !manifest_path.is_file() {
+        return Ok(stale_batch(AssetPackageFreshnessReason::MissingManifest));
+    }
+    if !batch_output_dir.is_dir() {
+        return Ok(stale_batch(
+            AssetPackageFreshnessReason::MissingBatchOutputDirectory,
+        ));
     }
 
     let settings = settings_for_asset_request(
@@ -769,7 +884,7 @@ fn current_batch_asset_result(
     let input_paths = collect_batch_input_paths(&request.input_paths, batch_output_dir)
         .map_err(|error| batch_collect_error(package.clone(), error))?;
     if input_paths.is_empty() {
-        return Ok(None);
+        return Ok(stale_batch(AssetPackageFreshnessReason::EmptyBatchInputSet));
     }
 
     let sources = source_identities(&input_paths)?;
@@ -781,85 +896,191 @@ fn current_batch_asset_result(
     );
     let source_info: AssetSourceInfoJson = read_json(&package.source_info_path)?;
     let diagnostics: BatchAssetDiagnosticsJson = read_json(&package.diagnostics_path)?;
-    if !batch_asset_metadata_matches(
+    if let Some(reason) = batch_asset_metadata_mismatch_reason(
         &source_info,
         &diagnostics,
         &sources,
         &identity,
         request.profile.label(),
     ) {
-        return Ok(None);
+        return Ok(stale_batch(reason));
     }
 
     let Some(report) = read_batch_report(manifest_path)? else {
-        return Ok(None);
+        return Ok(stale_batch(AssetPackageFreshnessReason::ManifestMismatch));
     };
-    if !batch_report_matches_request(&report, request.check_only, &settings)
-        || diagnostics.input_count != report.input_count()
+    if let Some(reason) = batch_report_mismatch_reason(&report, request.check_only, &settings) {
+        return Ok(stale_batch(reason));
+    }
+    if diagnostics.input_count != report.input_count()
         || diagnostics.converted_count != report.converted_count()
         || diagnostics.reused_count != report.reused_count()
         || diagnostics.checked_count != report.checked_count()
         || diagnostics.failed_count != report.failed_count()
     {
-        return Ok(None);
+        return Ok(stale_batch(
+            AssetPackageFreshnessReason::DiagnosticsMismatch,
+        ));
     }
 
-    Ok(Some(BatchAssetConversionResult {
-        package,
-        asset_id: identity.asset_id,
-        source_sha256: identity.source_sha256,
-        source_size_bytes: identity.source_size_bytes,
-        settings_fingerprint: identity.settings_fingerprint,
-        report,
-    }))
+    Ok((
+        AssetPackageFreshness::current(),
+        Some(BatchAssetConversionResult {
+            package,
+            asset_id: identity.asset_id,
+            source_sha256: identity.source_sha256,
+            source_size_bytes: identity.source_size_bytes,
+            settings_fingerprint: identity.settings_fingerprint,
+            report,
+        }),
+    ))
 }
 
-fn single_asset_metadata_matches(
+fn stale_asset(
+    reason: AssetPackageFreshnessReason,
+) -> (AssetPackageFreshness, Option<AssetConversionResult>) {
+    (AssetPackageFreshness::stale(reason), None)
+}
+
+fn stale_batch(
+    reason: AssetPackageFreshnessReason,
+) -> (AssetPackageFreshness, Option<BatchAssetConversionResult>) {
+    (AssetPackageFreshness::stale(reason), None)
+}
+
+fn single_asset_metadata_mismatch_reason(
     source_info: &AssetSourceInfoJson,
     diagnostics: &AssetDiagnosticsJson,
     source: &SourceIdentity,
     identity: &AssetIdentity,
     profile: &str,
-) -> bool {
-    source_info.contract_version == ASSET_PACKAGE_CONTRACT_VERSION
-        && source_info.kind == "conversion"
-        && source_info.profile == profile
-        && source_info.asset_id == identity.asset_id
-        && source_info.source_sha256 == identity.source_sha256
-        && source_info.source_size_bytes == identity.source_size_bytes
-        && source_info.settings_fingerprint == identity.settings_fingerprint
-        && source_info_inputs_match(&source_info.inputs, std::slice::from_ref(source))
-        && diagnostics.contract_version == ASSET_PACKAGE_CONTRACT_VERSION
-        && diagnostics.status == "succeeded"
-        && diagnostics.profile == profile
-        && diagnostics.asset_id == identity.asset_id
-        && diagnostics.source_sha256 == identity.source_sha256
-        && diagnostics.source_size_bytes == identity.source_size_bytes
-        && diagnostics.settings_fingerprint == identity.settings_fingerprint
+) -> Option<AssetPackageFreshnessReason> {
+    source_info_mismatch_reason(
+        source_info,
+        "conversion",
+        std::slice::from_ref(source),
+        identity,
+        profile,
+    )
+    .or_else(|| single_diagnostics_mismatch_reason(diagnostics, identity, profile))
 }
 
-fn batch_asset_metadata_matches(
+fn batch_asset_metadata_mismatch_reason(
     source_info: &AssetSourceInfoJson,
     diagnostics: &BatchAssetDiagnosticsJson,
     sources: &[SourceIdentity],
     identity: &AssetIdentity,
     profile: &str,
-) -> bool {
-    source_info.contract_version == ASSET_PACKAGE_CONTRACT_VERSION
-        && source_info.kind == "batch_conversion"
-        && source_info.profile == profile
-        && source_info.asset_id == identity.asset_id
-        && source_info.source_sha256 == identity.source_sha256
-        && source_info.source_size_bytes == identity.source_size_bytes
-        && source_info.settings_fingerprint == identity.settings_fingerprint
-        && source_info_inputs_match(&source_info.inputs, sources)
-        && diagnostics.contract_version == ASSET_PACKAGE_CONTRACT_VERSION
-        && diagnostics.status == "succeeded"
-        && diagnostics.profile == profile
-        && diagnostics.asset_id == identity.asset_id
-        && diagnostics.source_sha256 == identity.source_sha256
-        && diagnostics.source_size_bytes == identity.source_size_bytes
-        && diagnostics.settings_fingerprint == identity.settings_fingerprint
+) -> Option<AssetPackageFreshnessReason> {
+    source_info_mismatch_reason(source_info, "batch_conversion", sources, identity, profile)
+        .or_else(|| batch_diagnostics_mismatch_reason(diagnostics, identity, profile))
+}
+
+fn source_info_mismatch_reason(
+    source_info: &AssetSourceInfoJson,
+    expected_kind: &str,
+    sources: &[SourceIdentity],
+    identity: &AssetIdentity,
+    profile: &str,
+) -> Option<AssetPackageFreshnessReason> {
+    if source_info.contract_version != ASSET_PACKAGE_CONTRACT_VERSION {
+        return Some(AssetPackageFreshnessReason::PackageContractMismatch);
+    }
+    if source_info.kind != expected_kind {
+        return Some(AssetPackageFreshnessReason::PackageKindMismatch);
+    }
+    if source_info.source_sha256 != identity.source_sha256
+        || source_info.source_size_bytes != identity.source_size_bytes
+        || !source_info_inputs_match(&source_info.inputs, sources)
+    {
+        return Some(AssetPackageFreshnessReason::SourceChanged);
+    }
+    if source_info.profile != profile
+        || source_info.settings_fingerprint != identity.settings_fingerprint
+    {
+        return Some(AssetPackageFreshnessReason::SettingsChanged);
+    }
+    if source_info.asset_id != identity.asset_id {
+        return Some(AssetPackageFreshnessReason::SourceInfoMismatch);
+    }
+    None
+}
+
+fn single_diagnostics_mismatch_reason(
+    diagnostics: &AssetDiagnosticsJson,
+    identity: &AssetIdentity,
+    profile: &str,
+) -> Option<AssetPackageFreshnessReason> {
+    diagnostics_mismatch_reason(
+        DiagnosticsFreshnessFields {
+            contract_version: diagnostics.contract_version.as_str(),
+            status: diagnostics.status.as_str(),
+            profile: diagnostics.profile.as_str(),
+            asset_id: diagnostics.asset_id.as_str(),
+            source_sha256: diagnostics.source_sha256.as_str(),
+            source_size_bytes: diagnostics.source_size_bytes,
+            settings_fingerprint: diagnostics.settings_fingerprint.as_str(),
+        },
+        identity,
+        profile,
+    )
+}
+
+fn batch_diagnostics_mismatch_reason(
+    diagnostics: &BatchAssetDiagnosticsJson,
+    identity: &AssetIdentity,
+    profile: &str,
+) -> Option<AssetPackageFreshnessReason> {
+    diagnostics_mismatch_reason(
+        DiagnosticsFreshnessFields {
+            contract_version: diagnostics.contract_version.as_str(),
+            status: diagnostics.status.as_str(),
+            profile: diagnostics.profile.as_str(),
+            asset_id: diagnostics.asset_id.as_str(),
+            source_sha256: diagnostics.source_sha256.as_str(),
+            source_size_bytes: diagnostics.source_size_bytes,
+            settings_fingerprint: diagnostics.settings_fingerprint.as_str(),
+        },
+        identity,
+        profile,
+    )
+}
+
+struct DiagnosticsFreshnessFields<'a> {
+    contract_version: &'a str,
+    status: &'a str,
+    profile: &'a str,
+    asset_id: &'a str,
+    source_sha256: &'a str,
+    source_size_bytes: u64,
+    settings_fingerprint: &'a str,
+}
+
+fn diagnostics_mismatch_reason(
+    diagnostics: DiagnosticsFreshnessFields<'_>,
+    identity: &AssetIdentity,
+    expected_profile: &str,
+) -> Option<AssetPackageFreshnessReason> {
+    if diagnostics.contract_version != ASSET_PACKAGE_CONTRACT_VERSION {
+        return Some(AssetPackageFreshnessReason::PackageContractMismatch);
+    }
+    if diagnostics.status != "succeeded" {
+        return Some(AssetPackageFreshnessReason::DiagnosticsFailed);
+    }
+    if diagnostics.source_sha256 != identity.source_sha256
+        || diagnostics.source_size_bytes != identity.source_size_bytes
+    {
+        return Some(AssetPackageFreshnessReason::SourceChanged);
+    }
+    if diagnostics.profile != expected_profile
+        || diagnostics.settings_fingerprint != identity.settings_fingerprint
+    {
+        return Some(AssetPackageFreshnessReason::SettingsChanged);
+    }
+    if diagnostics.asset_id != identity.asset_id {
+        return Some(AssetPackageFreshnessReason::DiagnosticsMismatch);
+    }
+    None
 }
 
 fn source_info_inputs_match(inputs: &[AssetSourceInputJson], sources: &[SourceIdentity]) -> bool {
@@ -1659,19 +1880,25 @@ impl BatchManifestItemJson {
     }
 }
 
-fn batch_report_matches_request(
+fn batch_report_mismatch_reason(
     report: &BatchReport,
     check_only: bool,
     settings: &JobConversionSettings,
-) -> bool {
+) -> Option<AssetPackageFreshnessReason> {
     if report.input_count() == 0 || report.failed_count() != 0 {
-        return false;
+        return Some(AssetPackageFreshnessReason::ManifestMismatch);
     }
     if check_only {
-        return report.checked_count() == report.input_count();
+        return (report.checked_count() != report.input_count())
+            .then_some(AssetPackageFreshnessReason::ManifestMismatch);
     }
-    report.converted_count() + report.reused_count() == report.input_count()
-        && report.items.iter().all(|item| match &item.status {
+
+    if report.converted_count() + report.reused_count() != report.input_count() {
+        return Some(AssetPackageFreshnessReason::ManifestMismatch);
+    }
+
+    for item in &report.items {
+        let output_artifacts_exist = match &item.status {
             BatchItemStatus::Ok {
                 output_path,
                 metadata_path,
@@ -1691,8 +1918,16 @@ fn batch_report_matches_request(
                             .as_ref()
                             .is_some_and(|path| Path::new(path).is_file()))
             }
-            BatchItemStatus::Checked { .. } | BatchItemStatus::Error { .. } => false,
-        })
+            BatchItemStatus::Checked { .. } | BatchItemStatus::Error { .. } => {
+                return Some(AssetPackageFreshnessReason::ManifestMismatch);
+            }
+        };
+        if !output_artifacts_exist {
+            return Some(AssetPackageFreshnessReason::OutputArtifactMissing);
+        }
+    }
+
+    None
 }
 
 fn read_json<T>(path: &Path) -> Result<T, AssetConversionError>

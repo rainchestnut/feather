@@ -158,7 +158,8 @@ use feather_lite::{
     AssetConversionProfile, AssetConversionRequest, BatchAssetConversionRequest,
     BatchConversionOptions, ConversionOptions, InspectOptions, JobConversionSettings,
     LocalJobStore, ReferencePathMapping, convert_path_to_glb, ensure_asset_package,
-    ensure_batch_asset_package, inspect_path, is_asset_package_current,
+    ensure_batch_asset_package, explain_asset_package_freshness,
+    explain_batch_asset_package_freshness, inspect_path, is_asset_package_current,
     is_batch_asset_package_current, run_batch_conversion,
 };
 
@@ -204,6 +205,8 @@ println!(
         .display()
 );
 println!("{}", is_asset_package_current(&asset_request)?);
+let freshness = explain_asset_package_freshness(&asset_request)?;
+println!("{}", freshness.reason.as_str());
 
 let batch_asset_request = BatchAssetConversionRequest::new(
     vec![PathBuf::from("./incoming-cad")],
@@ -212,6 +215,8 @@ let batch_asset_request = BatchAssetConversionRequest::new(
 let batch_asset = ensure_batch_asset_package(&batch_asset_request)?;
 println!("{}", batch_asset.status.as_str());
 println!("{}", is_batch_asset_package_current(&batch_asset_request)?);
+let batch_freshness = explain_batch_asset_package_freshness(&batch_asset_request)?;
+println!("{}", batch_freshness.reason.as_str());
 
 let batch = run_batch_conversion(
     &[PathBuf::from("./incoming-cad")],
@@ -240,9 +245,12 @@ The main embeddable operations are:
   or reuse a standard artifact package and hide low-level mesh options behind
   `AssetConversionProfile`; conversion results include `asset_id`, source
   SHA-256, source byte size, and settings fingerprint fields.
-- `is_asset_package_current` and `is_batch_asset_package_current`: validate that
-  business asset packages still match the current source hash, source size,
-  conversion profile, and batch mode.
+- `is_asset_package_current`, `is_batch_asset_package_current`,
+  `explain_asset_package_freshness`, and
+  `explain_batch_asset_package_freshness`: validate that business asset
+  packages still match the current source hash, source size, conversion profile,
+  and batch mode; the explain APIs return stable reason codes for stale
+  packages.
 - `detect_format` and `inspect_path`: probe, asset discovery, and optional real
   import validation.
 - `convert_path_to_glb`: single-file conversion with mesh cleanup, GLB
@@ -396,6 +404,12 @@ freshness checks are computed. Both package metadata files include a
 deterministic `asset_id`, source SHA-256, source byte size, and settings
 fingerprint so callers can decide whether a package still matches the current
 source, conversion profile, and batch mode.
+For UI, logs, or orchestration code that needs more than a boolean,
+`explain_asset_package_freshness` and
+`explain_batch_asset_package_freshness` return `AssetPackageFreshness` with a
+stable reason label such as `source_changed`, `settings_changed`,
+`missing_metadata`, `missing_manifest`, `manifest_mismatch`,
+`output_artifact_missing`, or `diagnostics_failed`.
 When an existing batch package is stale, `ensure_batch_asset_package` reuses
 unchanged successful items and converts only changed or new inputs; deleted
 inputs are removed from the rewritten manifest.

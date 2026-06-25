@@ -3,10 +3,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use feather_lite::{
     ASSET_PACKAGE_CONTRACT_VERSION, AssetConversionError, AssetConversionProfile,
-    AssetConversionRequest, AssetPackageStatus, AssetPreflightRequest, BatchAssetConversionRequest,
-    BatchItemStatus, convert_asset, convert_batch_assets, ensure_asset_package,
-    ensure_batch_asset_package, is_asset_package_current, is_batch_asset_package_current,
-    preflight_asset,
+    AssetConversionRequest, AssetPackageFreshnessReason, AssetPackageStatus, AssetPreflightRequest,
+    BatchAssetConversionRequest, BatchItemStatus, convert_asset, convert_batch_assets,
+    ensure_asset_package, ensure_batch_asset_package, explain_asset_package_freshness,
+    explain_batch_asset_package_freshness, is_asset_package_current,
+    is_batch_asset_package_current, preflight_asset,
 };
 
 const SAMPLE_CACHE: &str = "\
@@ -189,6 +190,91 @@ fn ensure_asset_package_rebuilds_when_source_or_profile_changes() {
 }
 
 #[test]
+fn explain_asset_package_freshness_reports_single_reuse_reasons() {
+    let temp_dir = unique_temp_dir("asset-freshness-single");
+    fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+    let input_path = temp_dir.join("fixture.CATPart");
+    let output_dir = temp_dir.join("asset");
+    fs::write(
+        &input_path,
+        format!("CATPart private payload prefix\n{SAMPLE_CACHE}\nprivate suffix"),
+    )
+    .expect("fixture should be written");
+
+    let request = AssetConversionRequest::new(&input_path, &output_dir);
+    let missing_package =
+        explain_asset_package_freshness(&request).expect("freshness should explain missing state");
+    assert!(!missing_package.current);
+    assert_eq!(
+        missing_package.reason,
+        AssetPackageFreshnessReason::MissingSourceInfo
+    );
+
+    let first = ensure_asset_package(&request).expect("first ensure should convert");
+    let current =
+        explain_asset_package_freshness(&request).expect("freshness should explain current state");
+    assert!(current.current);
+    assert_eq!(current.reason, AssetPackageFreshnessReason::Current);
+    assert_eq!(current.reason.as_str(), "current");
+
+    let metadata_path = first
+        .asset
+        .package
+        .metadata_path
+        .as_ref()
+        .expect("metadata path should be reserved")
+        .clone();
+    fs::remove_file(&metadata_path).expect("metadata should be removable");
+    let missing_metadata = explain_asset_package_freshness(&request)
+        .expect("freshness should detect missing metadata");
+    assert!(!missing_metadata.current);
+    assert_eq!(
+        missing_metadata.reason,
+        AssetPackageFreshnessReason::MissingMetadata
+    );
+    assert_eq!(missing_metadata.reason.as_str(), "missing_metadata");
+
+    let rebuilt = ensure_asset_package(&request).expect("missing metadata should rebuild");
+    let diagnostics_path = rebuilt.asset.package.diagnostics_path.clone();
+    fs::remove_file(&diagnostics_path).expect("diagnostics should be removable");
+    let missing_diagnostics = explain_asset_package_freshness(&request)
+        .expect("freshness should detect missing diagnostics");
+    assert_eq!(
+        missing_diagnostics.reason,
+        AssetPackageFreshnessReason::MissingDiagnostics
+    );
+
+    let _ = ensure_asset_package(&request).expect("missing diagnostics should rebuild");
+    fs::write(
+        &input_path,
+        format!("CATPart private payload changed\n{SAMPLE_CACHE}\nprivate suffix"),
+    )
+    .expect("fixture should be changed");
+    let changed_source =
+        explain_asset_package_freshness(&request).expect("freshness should detect source change");
+    assert_eq!(
+        changed_source.reason,
+        AssetPackageFreshnessReason::SourceChanged
+    );
+
+    let changed_result = ensure_asset_package(&request).expect("changed source should rebuild");
+    let mut high_quality_request = request.clone();
+    high_quality_request.profile = AssetConversionProfile::HighQuality;
+    let changed_settings = explain_asset_package_freshness(&high_quality_request)
+        .expect("freshness should detect settings change");
+    assert_eq!(
+        changed_settings.reason,
+        AssetPackageFreshnessReason::SettingsChanged
+    );
+
+    assert_ne!(
+        changed_result.asset.source_sha256,
+        first.asset.source_sha256
+    );
+    fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
+}
+
+#[test]
 fn ensure_asset_package_rebuilds_incomplete_or_failed_package() {
     let temp_dir = unique_temp_dir("asset-ensure-incomplete");
     fs::create_dir_all(&temp_dir).expect("temp dir should be created");
@@ -210,6 +296,12 @@ fn ensure_asset_package_rebuilds_incomplete_or_failed_package() {
         .expect("model path should be reserved")
         .clone();
     fs::remove_file(&model_path).expect("model should be removable");
+    assert_eq!(
+        explain_asset_package_freshness(&request)
+            .expect("freshness should detect missing model")
+            .reason,
+        AssetPackageFreshnessReason::MissingModel
+    );
 
     let rebuilt = ensure_asset_package(&request).expect("missing model should convert");
     assert_eq!(rebuilt.status, AssetPackageStatus::Converted);
@@ -223,6 +315,12 @@ fn ensure_asset_package_rebuilds_incomplete_or_failed_package() {
         serde_json::to_string_pretty(&diagnostics).expect("diagnostics should serialize"),
     )
     .expect("diagnostics should be writable");
+    assert_eq!(
+        explain_asset_package_freshness(&request)
+            .expect("freshness should detect failed diagnostics")
+            .reason,
+        AssetPackageFreshnessReason::DiagnosticsFailed
+    );
 
     let after_failed_diagnostics =
         ensure_asset_package(&request).expect("failed diagnostics should convert");
@@ -440,6 +538,87 @@ fn ensure_batch_asset_package_rebuilds_when_source_or_mode_changes() {
     assert_ne!(
         changed_mode.asset.settings_fingerprint,
         changed_source.asset.settings_fingerprint
+    );
+
+    fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
+}
+
+#[test]
+fn explain_batch_asset_package_freshness_reports_batch_reuse_reasons() {
+    let temp_dir = unique_temp_dir("asset-freshness-batch");
+    fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+    let input_path = temp_dir.join("fixture.CATPart");
+    let output_dir = temp_dir.join("batch-asset");
+    fs::write(
+        &input_path,
+        format!("CATPart private payload prefix\n{SAMPLE_CACHE}\nprivate suffix"),
+    )
+    .expect("fixture should be written");
+
+    let request = BatchAssetConversionRequest::new(vec![input_path], &output_dir);
+    let missing_package = explain_batch_asset_package_freshness(&request)
+        .expect("freshness should explain missing batch state");
+    assert_eq!(
+        missing_package.reason,
+        AssetPackageFreshnessReason::MissingSourceInfo
+    );
+
+    let first = ensure_batch_asset_package(&request).expect("first ensure should convert");
+    let current = explain_batch_asset_package_freshness(&request)
+        .expect("freshness should explain current batch state");
+    assert!(current.current);
+    assert_eq!(current.reason, AssetPackageFreshnessReason::Current);
+
+    let mut check_request = request.clone();
+    check_request.check_only = true;
+    let changed_mode = explain_batch_asset_package_freshness(&check_request)
+        .expect("freshness should detect batch mode change");
+    assert_eq!(
+        changed_mode.reason,
+        AssetPackageFreshnessReason::SettingsChanged
+    );
+
+    let output_path = match &first.asset.report.items[0].status {
+        BatchItemStatus::Ok { output_path, .. } => std::path::PathBuf::from(output_path),
+        _ => panic!("batch item should be converted"),
+    };
+    fs::remove_file(&output_path).expect("batch output should be removable");
+    let missing_output = explain_batch_asset_package_freshness(&request)
+        .expect("freshness should detect missing batch output");
+    assert_eq!(
+        missing_output.reason,
+        AssetPackageFreshnessReason::OutputArtifactMissing
+    );
+
+    let rebuilt =
+        ensure_batch_asset_package(&request).expect("missing output should be regenerated");
+    let manifest_path = rebuilt
+        .asset
+        .package
+        .manifest_path
+        .as_ref()
+        .expect("manifest path should be reserved")
+        .clone();
+    let mut manifest = parse_json(&fs::read_to_string(&manifest_path).unwrap());
+    manifest["contract_version"] = serde_json::Value::String("broken-contract".to_string());
+    fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest).expect("manifest should serialize"),
+    )
+    .expect("manifest should be writable");
+    let manifest_mismatch = explain_batch_asset_package_freshness(&request)
+        .expect("freshness should detect manifest mismatch");
+    assert_eq!(
+        manifest_mismatch.reason,
+        AssetPackageFreshnessReason::ManifestMismatch
+    );
+
+    fs::remove_file(&manifest_path).expect("manifest should be removable");
+    let missing_manifest = explain_batch_asset_package_freshness(&request)
+        .expect("freshness should detect missing manifest");
+    assert_eq!(
+        missing_manifest.reason,
+        AssetPackageFreshnessReason::MissingManifest
     );
 
     fs::remove_dir_all(temp_dir).expect("temp dir should be removable");

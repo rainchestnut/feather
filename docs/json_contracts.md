@@ -254,6 +254,21 @@ Emitted by:
 - `ensure_asset_package` when the package is stale and conversion runs
 - `ensure_batch_asset_package` when the package is stale and batch conversion runs
 
+Consumed by:
+
+- `is_asset_package_current` and `is_batch_asset_package_current`
+- `explain_asset_package_freshness` and
+  `explain_batch_asset_package_freshness`
+
+The explain APIs return `AssetPackageFreshness` instead of writing JSON. The
+stable reason labels include `current`, `missing_source_info`,
+`missing_diagnostics`, `missing_model`, `missing_metadata`, `missing_manifest`,
+`missing_batch_output_directory`, `empty_batch_input_set`, `source_changed`,
+`settings_changed`, `package_contract_mismatch`, `package_kind_mismatch`,
+`source_info_mismatch`, `diagnostics_failed`, `diagnostics_mismatch`,
+`manifest_mismatch`, `output_artifact_missing`, and
+`incomplete_diagnostics`.
+
 Required fields in `source-info.json`:
 
 - `contract_version`: always `feather.asset-package.v1`

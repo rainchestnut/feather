@@ -50,10 +50,12 @@ mod json;
 
 pub use asset::{
     AssetConversionError, AssetConversionProfile, AssetConversionRequest, AssetConversionResult,
-    AssetFailure, AssetIdentity, AssetOutputPackage, AssetPackageEnsureResult, AssetPackageStatus,
-    AssetPreflightRequest, AssetPreflightResult, BatchAssetConversionRequest,
-    BatchAssetConversionResult, BatchAssetPackageEnsureResult, convert_asset, convert_batch_assets,
-    ensure_asset_package, ensure_batch_asset_package, is_asset_package_current,
+    AssetFailure, AssetIdentity, AssetOutputPackage, AssetPackageEnsureResult,
+    AssetPackageFreshness, AssetPackageFreshnessReason, AssetPackageStatus, AssetPreflightRequest,
+    AssetPreflightResult, BatchAssetConversionRequest, BatchAssetConversionResult,
+    BatchAssetPackageEnsureResult, convert_asset, convert_batch_assets, ensure_asset_package,
+    ensure_batch_asset_package, explain_asset_package_freshness,
+    explain_batch_asset_package_freshness, is_asset_package_current,
     is_batch_asset_package_current, preflight_asset,
 };
 pub use assets::embedded::{
