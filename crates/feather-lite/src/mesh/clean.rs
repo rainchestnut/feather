@@ -28,6 +28,7 @@ impl Default for MeshOptions {
 
 /// Optimizes every mesh primitive in a visual document.
 pub fn optimize_document(document: &mut LiteDocument, options: &MeshOptions) {
+    let mut removed_degenerate_triangles = 0_u64;
     for mesh in &mut document.meshes {
         for primitive in &mut mesh.primitives {
             ensure_indices(primitive);
@@ -45,6 +46,8 @@ pub fn optimize_document(document: &mut LiteDocument, options: &MeshOptions) {
             if options.weld_vertices {
                 weld_primitive_vertices(primitive, options.position_epsilon.max(f32::EPSILON));
             }
+
+            removed_degenerate_triangles += remove_degenerate_triangles(primitive);
         }
     }
 
@@ -53,6 +56,12 @@ pub fn optimize_document(document: &mut LiteDocument, options: &MeshOptions) {
             "quantized mesh positions to grid step {}",
             format_step(step)
         ));
+    }
+    if removed_degenerate_triangles > 0 {
+        document.metadata.warnings.push(format!(
+            "removed {removed_degenerate_triangles} degenerate triangles after mesh cleanup"
+        ));
+        prune_empty_geometry(document);
     }
     apply_triangle_budget(document, options.max_triangles);
     for mesh in &mut document.meshes {
@@ -131,6 +140,73 @@ fn weld_primitive_vertices(primitive: &mut LitePrimitive, epsilon: f32) {
 
     primitive.positions = unique_positions;
     primitive.normals = unique_normals;
+}
+
+// Drops triangles that became invalid during cleanup, then compacts the vertex
+// buffers so downstream GLB export only sees referenced geometry.
+fn remove_degenerate_triangles(primitive: &mut LitePrimitive) -> u64 {
+    if primitive.indices.is_empty() {
+        return 0;
+    }
+
+    let old_positions = primitive.positions.clone();
+    let old_normals = primitive.normals.clone();
+    let has_normals = old_normals.len() == old_positions.len();
+    let mut remap = HashMap::<u32, u32>::new();
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+    let mut indices = Vec::with_capacity(primitive.indices.len());
+    let mut removed = 0_u64;
+
+    for triangle in primitive.indices.chunks_exact(3) {
+        if is_degenerate_triangle(triangle, &old_positions) {
+            removed += 1;
+            continue;
+        }
+
+        for old_index in triangle {
+            let new_index = if let Some(existing) = remap.get(old_index) {
+                *existing
+            } else {
+                let old_position_index = *old_index as usize;
+                let new_index = positions.len() as u32;
+                positions.push(old_positions[old_position_index]);
+                if has_normals {
+                    normals.push(old_normals[old_position_index]);
+                }
+                remap.insert(*old_index, new_index);
+                new_index
+            };
+            indices.push(new_index);
+        }
+    }
+
+    if removed > 0 {
+        primitive.positions = positions;
+        primitive.normals = normals;
+        primitive.indices = indices;
+    }
+    removed
+}
+
+fn is_degenerate_triangle(triangle: &[u32], positions: &[[f32; 3]]) -> bool {
+    let [a, b, c] = triangle else {
+        return true;
+    };
+    if a == b || b == c || a == c {
+        return true;
+    }
+
+    let Some(a) = positions.get(*a as usize).copied() else {
+        return true;
+    };
+    let Some(b) = positions.get(*b as usize).copied() else {
+        return true;
+    };
+    let Some(c) = positions.get(*c as usize).copied() else {
+        return true;
+    };
+    a == b || b == c || a == c || has_degenerate_area(a, b, c)
 }
 
 fn apply_triangle_budget(document: &mut LiteDocument, max_triangles: Option<u64>) {
@@ -366,11 +442,31 @@ fn quantize_vec3(value: [f32; 3], epsilon: f32) -> [i64; 3] {
 fn face_normal(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> [f32; 3] {
     let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
     let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
-    normalize([
-        ab[1] * ac[2] - ab[2] * ac[1],
-        ab[2] * ac[0] - ab[0] * ac[2],
-        ab[0] * ac[1] - ab[1] * ac[0],
-    ])
+    normalize(cross(ab, ac))
+}
+
+fn has_degenerate_area(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> bool {
+    let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    let ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    let bc = [c[0] - b[0], c[1] - b[1], c[2] - b[2]];
+    let edge_scale = length_squared(ab)
+        .max(length_squared(ac))
+        .max(length_squared(bc));
+    let cross = cross(ab, ac);
+    let area_scale = length_squared(cross);
+    area_scale <= f32::EPSILON * f32::EPSILON * edge_scale * edge_scale
+}
+
+fn length_squared(value: [f32; 3]) -> f32 {
+    value[0] * value[0] + value[1] * value[1] + value[2] * value[2]
+}
+
+fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
 }
 
 fn add_assign(target: &mut [f32; 3], value: [f32; 3]) {

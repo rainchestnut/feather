@@ -1054,6 +1054,53 @@ f 1//1 2//1 3//1";
 }
 
 #[test]
+fn converts_cadpart_and_prunes_quantized_degenerate_triangles_from_cli() {
+    let temp_dir = unique_temp_dir("prune-degenerate");
+    fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+    let input = temp_dir.join("degenerate_after_quantize.CATPart");
+    let output_glb = temp_dir.join("degenerate_after_quantize.glb");
+    let metadata = temp_dir.join("degenerate_after_quantize.metadata.json");
+
+    let obj = "# Wavefront OBJ visual cache
+o Plate
+v 0 0 0
+v 2 0 0
+v 2 0.4 0
+v 0 2 0
+f 1 2 3
+f 1 3 4";
+    let bytes = format!("CATPart private payload prefix\n{obj}\nCATPart private payload suffix");
+    fs::write(&input, bytes).expect("test CADPart should be written");
+
+    let convert = Command::new(env!("CARGO_BIN_EXE_feather"))
+        .arg("convert")
+        .arg(&input)
+        .arg("-o")
+        .arg(&output_glb)
+        .arg("--metadata")
+        .arg(&metadata)
+        .arg("--quantize")
+        .arg("1.0")
+        .output()
+        .expect("convert command should run");
+
+    assert!(
+        convert.status.success(),
+        "{}",
+        String::from_utf8_lossy(&convert.stderr)
+    );
+
+    let glb = fs::read(&output_glb).expect("GLB should be written");
+    assert_eq!(&glb[0..4], &0x4654_6C67_u32.to_le_bytes());
+
+    let metadata_json = fs::read_to_string(&metadata).expect("metadata should be written");
+    assert!(metadata_json.contains("\"triangle_count\": 1"));
+    assert!(metadata_json.contains("removed 1 degenerate triangles after mesh cleanup"));
+
+    fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
+}
+
+#[test]
 fn converts_cadpart_without_normals_from_cli() {
     let temp_dir = unique_temp_dir("no-normals");
     fs::create_dir_all(&temp_dir).expect("temp dir should be created");

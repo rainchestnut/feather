@@ -307,6 +307,30 @@ fn mesh_position_quantization_snaps_preview_geometry() {
 }
 
 #[test]
+fn mesh_cleanup_removes_degenerate_triangles_after_quantization() {
+    let mut document = sample_lite_document();
+    document.meshes[0].primitives[0].positions[2] = [2.0, 0.4, 0.0];
+    document.meshes[0].primitives[0].positions[3] = [0.0, 2.0, 0.0];
+    let options = MeshOptions {
+        position_quantization_step: Some(1.0),
+        ..MeshOptions::default()
+    };
+
+    optimize_document(&mut document, &options);
+    validate_document(&document).expect("degenerate-pruned document should remain valid");
+
+    assert_eq!(document.metadata.triangle_count, 1);
+    assert_eq!(document.meshes[0].primitives[0].indices.len(), 3);
+    assert!(
+        document
+            .metadata
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("removed 1 degenerate triangles"))
+    );
+}
+
+#[test]
 fn metadata_exports_scene_bbox_with_node_transforms() {
     let mut document = sample_lite_document();
     document.nodes[0].transform[3][0] = 10.0;
