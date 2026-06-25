@@ -1,5 +1,6 @@
 //! Business-facing asset conversion facade built on the core pipeline.
 
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::fs;
@@ -12,10 +13,10 @@ use serde::Deserialize;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use crate::atomic_write::write_atomic;
+use crate::atomic_write::{remove_file_if_created, write_atomic};
 use crate::batch::{
     BatchConversionError, BatchConversionOptions, BatchItem, BatchItemStatus, BatchReport,
-    collect_batch_input_paths, run_batch_conversion,
+    batch_output_file_name, collect_batch_input_paths, run_batch_conversion, run_batch_item,
 };
 use crate::contracts::{ASSET_PACKAGE_CONTRACT_VERSION, BATCH_MANIFEST_CONTRACT_VERSION};
 use crate::diagnostics::batch_failure_category;
@@ -422,47 +423,12 @@ pub fn convert_batch_assets(
         },
     );
     match run {
-        Ok(report) => {
-            let result = BatchAssetConversionResult {
-                package: package.clone(),
-                asset_id: identity.asset_id.clone(),
-                source_sha256: identity.source_sha256.clone(),
-                source_size_bytes: identity.source_size_bytes,
-                settings_fingerprint: identity.settings_fingerprint.clone(),
-                report: report.report,
-            };
-            let failed_count = result.report.failed_count();
-            if failed_count == 0 {
-                write_batch_diagnostics(
-                    &package,
-                    request.profile.label(),
-                    "succeeded",
-                    &result,
-                    &identity,
-                    None,
-                )?;
-                Ok(result)
-            } else {
-                let failure = AssetFailure {
-                    stage: "batch".to_string(),
-                    category: "batch_item_failed".to_string(),
-                    message: format!("batch completed with {failed_count} failed items"),
-                    retryable: true,
-                };
-                let _ = write_batch_diagnostics(
-                    &package,
-                    request.profile.label(),
-                    "failed",
-                    &result,
-                    &identity,
-                    Some(&failure),
-                );
-                Err(AssetConversionError::BatchFailed {
-                    package: Box::new(package),
-                    failure: Box::new(failure),
-                })
-            }
-        }
+        Ok(report) => batch_asset_result_from_report(
+            &package,
+            request.profile.label(),
+            identity,
+            report.report,
+        ),
         Err(error) => {
             let failure = AssetFailure::from_batch_error(&error);
             let _ = write_failure_only_diagnostics(
@@ -477,6 +443,119 @@ pub fn convert_batch_assets(
                 failure: Box::new(failure),
             })
         }
+    }
+}
+
+fn convert_batch_assets_incremental(
+    request: &BatchAssetConversionRequest,
+) -> Result<BatchAssetConversionResult, AssetConversionError> {
+    let package = batch_asset_package(&request.output_dir);
+    ensure_dir(&package.root_dir)?;
+    let batch_output_dir = package
+        .batch_output_dir
+        .clone()
+        .expect("batch asset package reserves output dir");
+    ensure_dir(&batch_output_dir)?;
+    let manifest_path = package
+        .manifest_path
+        .clone()
+        .expect("batch asset package reserves manifest path");
+    let settings = settings_for_asset_request(
+        &request.profile,
+        &request.resolve_dirs,
+        &request.reference_path_mappings,
+        request.limits,
+    );
+    let input_paths = collect_batch_inputs_or_write_failure(
+        request,
+        &package,
+        &batch_output_dir,
+        request.profile.label(),
+    )?;
+    let input_identities = source_identities(&input_paths)?;
+    let identity = batch_identity_from_parts(
+        &input_identities,
+        request.profile.label(),
+        &settings,
+        request.check_only,
+    );
+    let reusable_items = if request.check_only {
+        BTreeMap::new()
+    } else {
+        batch_reuse_candidates(&package)?
+    };
+    write_source_info(
+        &package,
+        request.profile.label(),
+        &input_identities,
+        &identity,
+        "batch_conversion",
+    )?;
+
+    let report = run_incremental_batch_items(
+        &input_paths,
+        &input_identities,
+        &batch_output_dir,
+        &manifest_path,
+        &settings,
+        request.check_only,
+        &reusable_items,
+    )
+    .map_err(|error| {
+        let failure = AssetFailure::from_batch_error(&error);
+        let _ = write_failure_only_diagnostics(
+            &package,
+            request.profile.label(),
+            "failed",
+            Some(&identity),
+            &failure,
+        );
+        AssetConversionError::BatchFailed {
+            package: Box::new(package.clone()),
+            failure: Box::new(failure),
+        }
+    })?;
+
+    batch_asset_result_from_report(&package, request.profile.label(), identity, report)
+}
+
+fn batch_asset_result_from_report(
+    package: &AssetOutputPackage,
+    profile: &str,
+    identity: AssetIdentity,
+    report: BatchReport,
+) -> Result<BatchAssetConversionResult, AssetConversionError> {
+    let result = BatchAssetConversionResult {
+        package: package.clone(),
+        asset_id: identity.asset_id.clone(),
+        source_sha256: identity.source_sha256.clone(),
+        source_size_bytes: identity.source_size_bytes,
+        settings_fingerprint: identity.settings_fingerprint.clone(),
+        report,
+    };
+    let failed_count = result.report.failed_count();
+    if failed_count == 0 {
+        write_batch_diagnostics(package, profile, "succeeded", &result, &identity, None)?;
+        Ok(result)
+    } else {
+        let failure = AssetFailure {
+            stage: "batch".to_string(),
+            category: "batch_item_failed".to_string(),
+            message: format!("batch completed with {failed_count} failed items"),
+            retryable: true,
+        };
+        let _ = write_batch_diagnostics(
+            package,
+            profile,
+            "failed",
+            &result,
+            &identity,
+            Some(&failure),
+        );
+        Err(AssetConversionError::BatchFailed {
+            package: Box::new(package.clone()),
+            failure: Box::new(failure),
+        })
     }
 }
 
@@ -559,7 +638,7 @@ pub fn ensure_batch_asset_package(
 
     Ok(BatchAssetPackageEnsureResult {
         status: AssetPackageStatus::Converted,
-        asset: convert_batch_assets(request)?,
+        asset: convert_batch_assets_incremental(request)?,
     })
 }
 
@@ -718,6 +797,7 @@ fn current_batch_asset_result(
     if !batch_report_matches_request(&report, request.check_only, &settings)
         || diagnostics.input_count != report.input_count()
         || diagnostics.converted_count != report.converted_count()
+        || diagnostics.reused_count != report.reused_count()
         || diagnostics.checked_count != report.checked_count()
         || diagnostics.failed_count != report.failed_count()
     {
@@ -914,6 +994,217 @@ fn batch_collect_error(
         package: Box::new(package),
         failure: Box::new(failure),
     }
+}
+
+#[derive(Debug, Clone)]
+struct ReusableBatchItem {
+    source_sha256: String,
+    source_size_bytes: u64,
+    status: BatchItemStatus,
+}
+
+fn batch_reuse_candidates(
+    package: &AssetOutputPackage,
+) -> Result<BTreeMap<PathBuf, ReusableBatchItem>, AssetConversionError> {
+    let manifest_path = package
+        .manifest_path
+        .as_ref()
+        .expect("batch asset package reserves manifest path");
+    if !package.source_info_path.is_file() || !manifest_path.is_file() {
+        return Ok(BTreeMap::new());
+    }
+
+    let source_info: AssetSourceInfoJson = read_json(&package.source_info_path)?;
+    if source_info.contract_version != ASSET_PACKAGE_CONTRACT_VERSION
+        || source_info.kind != "batch_conversion"
+    {
+        return Ok(BTreeMap::new());
+    }
+    let Some(report) = read_batch_report(manifest_path)? else {
+        return Ok(BTreeMap::new());
+    };
+
+    let mut source_by_path = BTreeMap::new();
+    for input in source_info.inputs {
+        source_by_path.insert(input.path, (input.source_sha256, input.source_size_bytes));
+    }
+
+    let mut candidates = BTreeMap::new();
+    for item in report.items {
+        let path = PathBuf::from(&item.input_path);
+        let Some((source_sha256, source_size_bytes)) = source_by_path.get(&path) else {
+            continue;
+        };
+        let Some(status) = reusable_batch_status(&item.status) else {
+            continue;
+        };
+        candidates.insert(
+            path,
+            ReusableBatchItem {
+                source_sha256: source_sha256.clone(),
+                source_size_bytes: *source_size_bytes,
+                status,
+            },
+        );
+    }
+    Ok(candidates)
+}
+
+fn reusable_batch_status(status: &BatchItemStatus) -> Option<BatchItemStatus> {
+    match status {
+        BatchItemStatus::Ok {
+            source_format,
+            output_path,
+            metadata_path,
+            node_count,
+            mesh_count,
+            primitive_count,
+            vertex_count,
+            triangle_count,
+            ..
+        }
+        | BatchItemStatus::Reused {
+            source_format,
+            output_path,
+            metadata_path,
+            node_count,
+            mesh_count,
+            primitive_count,
+            vertex_count,
+            triangle_count,
+            ..
+        } => {
+            if !Path::new(output_path).is_file()
+                || metadata_path
+                    .as_ref()
+                    .is_some_and(|path| !Path::new(path).is_file())
+            {
+                return None;
+            }
+            Some(BatchItemStatus::Reused {
+                source_format: source_format.clone(),
+                output_path: output_path.clone(),
+                metadata_path: metadata_path.clone(),
+                output_size_bytes: file_size(Path::new(output_path)),
+                metadata_size_bytes: metadata_path
+                    .as_ref()
+                    .and_then(|path| file_size(Path::new(path))),
+                node_count: *node_count,
+                mesh_count: *mesh_count,
+                primitive_count: *primitive_count,
+                vertex_count: *vertex_count,
+                triangle_count: *triangle_count,
+            })
+        }
+        BatchItemStatus::Checked { .. } | BatchItemStatus::Error { .. } => None,
+    }
+}
+
+fn run_incremental_batch_items(
+    input_paths: &[PathBuf],
+    input_identities: &[SourceIdentity],
+    output_dir: &Path,
+    manifest_path: &Path,
+    settings: &JobConversionSettings,
+    check_only: bool,
+    reusable_items: &BTreeMap<PathBuf, ReusableBatchItem>,
+) -> Result<BatchReport, BatchConversionError> {
+    let options = BatchConversionOptions {
+        output_dir: output_dir.to_path_buf(),
+        manifest_path: None,
+        check_only,
+        conversion: settings.to_conversion_options(None),
+    };
+    let snapshots =
+        collect_incremental_output_snapshots(input_paths, output_dir, settings, check_only);
+    let mut items = Vec::with_capacity(input_paths.len());
+    for (index, (input_path, source)) in input_paths.iter().zip(input_identities).enumerate() {
+        if !check_only
+            && let Some(reusable) = reusable_items.get(input_path)
+            && reusable.source_sha256 == source.source_sha256
+            && reusable.source_size_bytes == source.source_size_bytes
+        {
+            items.push(BatchItem {
+                index,
+                input_path: input_path.display().to_string(),
+                input_size_bytes: Some(source.source_size_bytes),
+                duration_ms: 0,
+                status: reusable.status.clone(),
+            });
+            continue;
+        }
+
+        items.push(run_batch_item(index, input_path, &options));
+    }
+
+    let report = BatchReport::new(items);
+    if let Err(source) = write_atomic(manifest_path, report.to_manifest_json()) {
+        cleanup_incremental_created_outputs(&report, &snapshots);
+        return Err(BatchConversionError::WriteManifest {
+            path: manifest_path.to_path_buf(),
+            source,
+        });
+    }
+    Ok(report)
+}
+
+#[derive(Debug, Clone)]
+struct IncrementalOutputSnapshot {
+    output_path: PathBuf,
+    output_existed: bool,
+    metadata_path: Option<PathBuf>,
+    metadata_existed: bool,
+}
+
+fn collect_incremental_output_snapshots(
+    input_paths: &[PathBuf],
+    output_dir: &Path,
+    settings: &JobConversionSettings,
+    check_only: bool,
+) -> Vec<IncrementalOutputSnapshot> {
+    if check_only {
+        return Vec::new();
+    }
+
+    input_paths
+        .iter()
+        .enumerate()
+        .map(|(index, input_path)| {
+            let output_path = output_dir.join(batch_output_file_name(index, input_path));
+            let metadata_path = settings
+                .write_metadata
+                .then(|| output_path.with_extension("metadata.json"));
+            let metadata_existed = metadata_path.as_ref().is_some_and(|path| path.exists());
+            IncrementalOutputSnapshot {
+                output_existed: output_path.exists(),
+                output_path,
+                metadata_path,
+                metadata_existed,
+            }
+        })
+        .collect()
+}
+
+fn cleanup_incremental_created_outputs(
+    report: &BatchReport,
+    snapshots: &[IncrementalOutputSnapshot],
+) {
+    for item in &report.items {
+        if !item.status.is_converted() {
+            continue;
+        }
+        let Some(snapshot) = snapshots.get(item.index) else {
+            continue;
+        };
+        remove_file_if_created(&snapshot.output_path, snapshot.output_existed);
+        if let Some(metadata_path) = &snapshot.metadata_path {
+            remove_file_if_created(metadata_path, snapshot.metadata_existed);
+        }
+    }
+}
+
+fn file_size(path: &Path) -> Option<u64> {
+    fs::metadata(path).map(|metadata| metadata.len()).ok()
 }
 
 fn single_asset_package(output_dir: &Path) -> AssetOutputPackage {
@@ -1197,6 +1488,8 @@ struct BatchAssetDiagnosticsJson {
     settings_fingerprint: String,
     input_count: usize,
     converted_count: usize,
+    #[serde(default)]
+    reused_count: usize,
     checked_count: usize,
     failed_count: usize,
     failure: Option<AssetFailure>,
@@ -1221,6 +1514,7 @@ fn write_batch_diagnostics(
         settings_fingerprint: identity.settings_fingerprint.clone(),
         input_count: result.report.input_count(),
         converted_count: result.report.converted_count(),
+        reused_count: result.report.reused_count(),
         checked_count: result.report.checked_count(),
         failed_count: result.report.failed_count(),
         failure: failure.cloned(),
@@ -1254,6 +1548,7 @@ fn write_failure_only_diagnostics(
             .unwrap_or_default(),
         input_count: 0,
         converted_count: 0,
+        reused_count: 0,
         checked_count: 0,
         failed_count: 0,
         failure: Some(failure.clone()),
@@ -1331,6 +1626,18 @@ impl BatchManifestItemJson {
                 vertex_count: self.vertex_count?,
                 triangle_count: self.triangle_count?,
             },
+            "reused" => BatchItemStatus::Reused {
+                source_format: self.source_format?,
+                output_path: self.output_path?,
+                metadata_path: self.metadata_path,
+                output_size_bytes: self.output_size_bytes,
+                metadata_size_bytes: self.metadata_size_bytes,
+                node_count: self.node_count?,
+                mesh_count: self.mesh_count?,
+                primitive_count: self.primitive_count?,
+                vertex_count: self.vertex_count?,
+                triangle_count: self.triangle_count?,
+            },
             "checked" => BatchItemStatus::Checked {
                 source_format: self.source_format?,
                 node_count: self.node_count?,
@@ -1363,9 +1670,14 @@ fn batch_report_matches_request(
     if check_only {
         return report.checked_count() == report.input_count();
     }
-    report.converted_count() == report.input_count()
+    report.converted_count() + report.reused_count() == report.input_count()
         && report.items.iter().all(|item| match &item.status {
             BatchItemStatus::Ok {
+                output_path,
+                metadata_path,
+                ..
+            }
+            | BatchItemStatus::Reused {
                 output_path,
                 metadata_path,
                 ..

@@ -47,6 +47,24 @@ fn batch_report_serializes_manifest_summary_and_items() {
         },
         BatchItem {
             index: 1,
+            input_path: "input/reused.CATPart".to_string(),
+            input_size_bytes: Some(96),
+            duration_ms: 1,
+            status: BatchItemStatus::Reused {
+                source_format: "CATIA_CATPart".to_string(),
+                output_path: "out/asset_001_reused.glb".to_string(),
+                metadata_path: Some("out/asset_001_reused.metadata.json".to_string()),
+                output_size_bytes: Some(64),
+                metadata_size_bytes: Some(16),
+                node_count: 2,
+                mesh_count: 1,
+                primitive_count: 1,
+                vertex_count: 3,
+                triangle_count: 1,
+            },
+        },
+        BatchItem {
+            index: 2,
             input_path: "input/missing.CATProduct".to_string(),
             input_size_bytes: Some(40),
             duration_ms: 3,
@@ -64,21 +82,22 @@ fn batch_report_serializes_manifest_summary_and_items() {
         },
     ]);
 
-    assert_eq!(report.input_count(), 2);
-    assert_eq!(report.success_count(), 1);
+    assert_eq!(report.input_count(), 3);
+    assert_eq!(report.success_count(), 2);
     assert_eq!(report.converted_count(), 1);
+    assert_eq!(report.reused_count(), 1);
     assert_eq!(report.checked_count(), 0);
     assert_eq!(report.failed_count(), 1);
 
     let summary = report.summary();
-    assert_eq!(summary.total_input_bytes, 160);
-    assert_eq!(summary.total_output_bytes, 80);
-    assert_eq!(summary.total_metadata_bytes, 24);
-    assert_eq!(summary.total_node_count, 3);
-    assert_eq!(summary.total_mesh_count, 1);
-    assert_eq!(summary.total_primitive_count, 2);
-    assert_eq!(summary.total_vertex_count, 8);
-    assert_eq!(summary.total_triangle_count, 12);
+    assert_eq!(summary.total_input_bytes, 256);
+    assert_eq!(summary.total_output_bytes, 144);
+    assert_eq!(summary.total_metadata_bytes, 40);
+    assert_eq!(summary.total_node_count, 5);
+    assert_eq!(summary.total_mesh_count, 2);
+    assert_eq!(summary.total_primitive_count, 3);
+    assert_eq!(summary.total_vertex_count, 11);
+    assert_eq!(summary.total_triangle_count, 13);
     assert_eq!(
         summary.failure_categories[0].name,
         "missing_external_reference"
@@ -92,15 +111,17 @@ fn batch_report_serializes_manifest_summary_and_items() {
         parsed_json["contract_version"],
         BATCH_MANIFEST_CONTRACT_VERSION
     );
-    assert_eq!(parsed_json["input_count"], 2);
+    assert_eq!(parsed_json["input_count"], 3);
     assert_eq!(parsed_json["converted_count"], 1);
+    assert_eq!(parsed_json["reused_count"], 1);
     assert_eq!(parsed_json["failed_count"], 1);
-    assert_eq!(parsed_json["summary"]["total_node_count"], 3);
-    assert_eq!(parsed_json["summary"]["total_mesh_count"], 1);
-    assert_eq!(parsed_json["summary"]["total_primitive_count"], 2);
-    assert_eq!(parsed_json["summary"]["total_vertex_count"], 8);
-    assert_eq!(parsed_json["summary"]["total_triangle_count"], 12);
+    assert_eq!(parsed_json["summary"]["total_node_count"], 5);
+    assert_eq!(parsed_json["summary"]["total_mesh_count"], 2);
+    assert_eq!(parsed_json["summary"]["total_primitive_count"], 3);
+    assert_eq!(parsed_json["summary"]["total_vertex_count"], 11);
+    assert_eq!(parsed_json["summary"]["total_triangle_count"], 13);
     assert_eq!(parsed_json["items"][0]["status"], "ok");
+    assert_eq!(parsed_json["items"][0]["operation"], "converted");
     assert_eq!(parsed_json["items"][0]["node_count"], 3);
     assert_eq!(parsed_json["items"][0]["mesh_count"], 1);
     assert_eq!(parsed_json["items"][0]["primitive_count"], 2);
@@ -114,25 +135,31 @@ fn batch_report_serializes_manifest_summary_and_items() {
         parsed_json["items"][0]["capability"]["requires_visual_payload"],
         true
     );
-    assert_eq!(parsed_json["items"][1]["status"], "error");
+    assert_eq!(parsed_json["items"][1]["status"], "reused");
+    assert_eq!(parsed_json["items"][1]["operation"], "reused");
+    assert_eq!(parsed_json["items"][1]["triangle_count"], 1);
+    assert_eq!(parsed_json["items"][2]["status"], "error");
+    assert_eq!(parsed_json["items"][2]["operation"], "error");
     assert_eq!(
-        parsed_json["items"][1]["capability"]["format"],
+        parsed_json["items"][2]["capability"]["format"],
         "CATIA_CATProduct"
     );
     assert_eq!(
-        parsed_json["items"][1]["error_category"],
+        parsed_json["items"][2]["error_category"],
         "missing_external_reference"
     );
     assert!(
-        parsed_json["items"][1]["required_condition"]
+        parsed_json["items"][2]["required_condition"]
             .as_str()
             .expect("batch error should explain required condition")
             .contains("--resolve-dir")
     );
-    assert!(json.contains("\"input_count\": 2"));
+    assert!(json.contains("\"input_count\": 3"));
     assert!(json.contains("\"converted_count\": 1"));
+    assert!(json.contains("\"reused_count\": 1"));
     assert!(json.contains("\"failed_count\": 1"));
     assert!(json.contains("\"status\": \"ok\""));
+    assert!(json.contains("\"status\": \"reused\""));
     assert!(json.contains("\"status\": \"error\""));
     assert!(json.contains("\"error_category\": \"missing_external_reference\""));
 }

@@ -473,6 +473,98 @@ fn ensure_batch_asset_package_rebuilds_incomplete_package() {
 }
 
 #[test]
+fn ensure_batch_asset_package_reuses_unchanged_items_only() {
+    let temp_dir = unique_temp_dir("asset-batch-ensure-partial");
+    let source_dir = temp_dir.join("incoming");
+    let output_dir = temp_dir.join("batch-asset");
+    fs::create_dir_all(&source_dir).expect("source dir should be created");
+    let input_a = source_dir.join("a.CATPart");
+    let input_b = source_dir.join("b.CATPart");
+    let input_c = source_dir.join("c.CATPart");
+    let input_d = source_dir.join("d.CATPart");
+    fs::write(
+        &input_a,
+        format!("CATPart private payload A\n{SAMPLE_CACHE}\nprivate suffix"),
+    )
+    .expect("fixture A should be written");
+    fs::write(
+        &input_b,
+        format!("CATPart private payload B\n{SAMPLE_CACHE}\nprivate suffix"),
+    )
+    .expect("fixture B should be written");
+    fs::write(
+        &input_c,
+        format!("CATPart private payload C\n{SAMPLE_CACHE}\nprivate suffix"),
+    )
+    .expect("fixture C should be written");
+
+    let request = BatchAssetConversionRequest::new(vec![source_dir.clone()], &output_dir);
+    let first = ensure_batch_asset_package(&request).expect("first ensure should convert");
+    assert_eq!(first.status, AssetPackageStatus::Converted);
+    assert_eq!(first.asset.report.converted_count(), 3);
+    assert_eq!(first.asset.report.reused_count(), 0);
+
+    fs::write(
+        &input_b,
+        format!("CATPart private payload B changed\n{SAMPLE_CACHE}\nprivate suffix"),
+    )
+    .expect("fixture B should be changed");
+    fs::remove_file(&input_c).expect("fixture C should be removable");
+    fs::write(
+        &input_d,
+        format!("CATPart private payload D\n{SAMPLE_CACHE}\nprivate suffix"),
+    )
+    .expect("fixture D should be written");
+
+    let second = ensure_batch_asset_package(&request).expect("second ensure should be incremental");
+    assert_eq!(second.status, AssetPackageStatus::Converted);
+    assert_eq!(second.asset.report.input_count(), 3);
+    assert_eq!(second.asset.report.reused_count(), 1);
+    assert_eq!(second.asset.report.converted_count(), 2);
+    assert_eq!(second.asset.report.failed_count(), 0);
+    assert!(
+        second
+            .asset
+            .report
+            .items
+            .iter()
+            .any(|item| item.input_path == input_a.display().to_string()
+                && matches!(item.status, BatchItemStatus::Reused { .. }))
+    );
+    assert!(
+        second
+            .asset
+            .report
+            .items
+            .iter()
+            .all(|item| item.input_path != input_c.display().to_string())
+    );
+
+    let manifest = parse_json(
+        &fs::read_to_string(second.asset.package.manifest_path.as_ref().unwrap()).unwrap(),
+    );
+    assert_eq!(manifest["input_count"], 3);
+    assert_eq!(manifest["converted_count"], 2);
+    assert_eq!(manifest["reused_count"], 1);
+    assert!(
+        manifest["items"]
+            .as_array()
+            .expect("manifest items should be an array")
+            .iter()
+            .any(|item| item["status"] == "reused" && item["operation"] == "reused")
+    );
+    assert!(
+        manifest["items"]
+            .as_array()
+            .expect("manifest items should be an array")
+            .iter()
+            .all(|item| item["input_path"] != input_c.display().to_string())
+    );
+
+    fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
+}
+
+#[test]
 fn convert_asset_failure_writes_diagnostics_and_returns_package() {
     let temp_dir = unique_temp_dir("asset-failure");
     fs::create_dir_all(&temp_dir).expect("temp dir should be created");

@@ -356,8 +356,10 @@ counts, B-Rep flags, warnings, and the transformed scene bounding box.
 production operators can see which cache or preview payload was actually used.
 ZIP glTF previews dump both the `.gltf` JSON and same-directory `.bin` buffers.
 `batch` accepts files or directories, recursively converts supported inputs,
-continues after per-file failures, and writes a manifest with `ok`, `checked`,
-or `error` status for every attempted file. `batch --check-only` performs the
+continues after per-file failures, and writes a manifest with `ok`, `reused`,
+`checked`, or `error` status for every attempted file. The append-only
+`operation` field reports `converted`, `reused`, `checked`, or `error` for
+business callers. `batch --check-only` performs the
 same real lightweight import and Lite IR validation used by conversion but does
 not write GLB or metadata outputs, which makes it suitable as a production
 preflight before committing private CAD packages to a conversion queue.
@@ -394,6 +396,9 @@ freshness checks are computed. Both package metadata files include a
 deterministic `asset_id`, source SHA-256, source byte size, and settings
 fingerprint so callers can decide whether a package still matches the current
 source, conversion profile, and batch mode.
+When an existing batch package is stale, `ensure_batch_asset_package` reuses
+unchanged successful items and converts only changed or new inputs; deleted
+inputs are removed from the rewritten manifest.
 
 ## Local Job Store
 

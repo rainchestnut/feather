@@ -342,6 +342,9 @@ fn batch(args: &[String]) -> Result<(), String> {
     let failed_count = run.report.failed_count();
     println!("inputs: {}", run.report.input_count());
     println!("converted: {}", run.report.converted_count());
+    if run.report.reused_count() > 0 {
+        println!("reused: {}", run.report.reused_count());
+    }
     if check_only || run.report.checked_count() > 0 {
         println!("checked: {}", run.report.checked_count());
     }
@@ -616,6 +619,16 @@ fn print_batch_item(item: &BatchItem) {
         } => {
             println!(
                 "ok\t{}\t{}\t{} triangles",
+                item.input_path, output_path, triangle_count
+            );
+        }
+        BatchItemStatus::Reused {
+            output_path,
+            triangle_count,
+            ..
+        } => {
+            println!(
+                "reused\t{}\t{}\t{} triangles",
                 item.input_path, output_path, triangle_count
             );
         }

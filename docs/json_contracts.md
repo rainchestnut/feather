@@ -92,6 +92,7 @@ Required top-level fields:
 - `input_count`: integer
 - `success_count`: integer
 - `converted_count`: integer
+- `reused_count`: integer
 - `checked_count`: integer
 - `failed_count`: integer
 - `summary`: aggregate manifest summary object
@@ -99,21 +100,32 @@ Required top-level fields:
 
 Required aggregate quality fields in `summary`:
 
-- `total_node_count`: integer across successful converted and checked items
-- `total_mesh_count`: integer across successful converted and checked items
-- `total_primitive_count`: integer across successful converted and checked items
-- `total_vertex_count`: integer across successful converted and checked items
-- `total_triangle_count`: integer across successful converted and checked items
+- `total_node_count`: integer across successful converted, reused, and checked
+  items
+- `total_mesh_count`: integer across successful converted, reused, and checked
+  items
+- `total_primitive_count`: integer across successful converted, reused, and
+  checked items
+- `total_vertex_count`: integer across successful converted, reused, and checked
+  items
+- `total_triangle_count`: integer across successful converted, reused, and
+  checked items
 
 Stable item statuses:
 
-- `ok`: conversion succeeded and output paths/sizes describe written artifacts
+- `ok`: conversion succeeded in this run and output paths/sizes describe written
+  artifacts
+- `reused`: an existing output artifact was reused for an unchanged input
 - `checked`: check-only import validation succeeded without writing GLB output
 - `error`: conversion or validation failed for this item
 
-Successful `ok` and `checked` items include quality counts. For `ok` items
-these counts come from validated GLB output; for `checked` items they come from
-the imported IR used by check-only validation, before export-only mesh cleanup.
+Every item includes an append-only `operation` field. Successful operations are
+`converted`, `reused`, and `checked`; failed items use `error`.
+
+Successful `ok`, `reused`, and `checked` items include quality counts. For `ok`
+and `reused` items these counts come from validated GLB output; for `checked`
+items they come from the imported IR used by check-only validation, before
+export-only mesh cleanup.
 
 - `node_count`: integer
 - `mesh_count`: integer
@@ -281,7 +293,8 @@ Required fields in batch `diagnostics.json`:
 - `source_size_bytes`: total source byte size
 - `settings_fingerprint`: SHA-256 of profile plus concrete conversion settings
   and conversion vs check-only mode
-- `input_count`, `converted_count`, `checked_count`, `failed_count`: integers
+- `input_count`, `converted_count`, `reused_count`, `checked_count`,
+  `failed_count`: integers
 - `failure`: failure object or `null`
 - `updated_at_unix_ms`: integer
 

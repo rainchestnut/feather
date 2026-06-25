@@ -176,6 +176,18 @@ pub enum BatchItemStatus {
         vertex_count: usize,
         triangle_count: u64,
     },
+    Reused {
+        source_format: String,
+        output_path: String,
+        metadata_path: Option<String>,
+        output_size_bytes: Option<u64>,
+        metadata_size_bytes: Option<u64>,
+        node_count: usize,
+        mesh_count: usize,
+        primitive_count: usize,
+        vertex_count: usize,
+        triangle_count: u64,
+    },
     Checked {
         source_format: String,
         node_count: usize,
@@ -194,12 +206,20 @@ pub enum BatchItemStatus {
 impl BatchItemStatus {
     /// Returns true when the input completed either conversion or preflight.
     pub fn is_success(&self) -> bool {
-        matches!(self, Self::Ok { .. } | Self::Checked { .. })
+        matches!(
+            self,
+            Self::Ok { .. } | Self::Reused { .. } | Self::Checked { .. }
+        )
     }
 
     /// Returns true when the input produced an output artifact.
     pub fn is_converted(&self) -> bool {
         matches!(self, Self::Ok { .. })
+    }
+
+    /// Returns true when the input reused an existing output artifact.
+    pub fn is_reused(&self) -> bool {
+        matches!(self, Self::Reused { .. })
     }
 
     /// Returns true when the input passed check-only preflight.
@@ -209,23 +229,27 @@ impl BatchItemStatus {
 
     fn source_format(&self) -> Option<&str> {
         match self {
-            Self::Ok { source_format, .. } | Self::Checked { source_format, .. } => {
-                Some(source_format)
-            }
+            Self::Ok { source_format, .. }
+            | Self::Reused { source_format, .. }
+            | Self::Checked { source_format, .. } => Some(source_format),
             Self::Error { diagnostic, .. } => diagnostic.source_format.as_deref(),
         }
     }
 
     fn mesh_count(&self) -> usize {
         match self {
-            Self::Ok { mesh_count, .. } | Self::Checked { mesh_count, .. } => *mesh_count,
+            Self::Ok { mesh_count, .. }
+            | Self::Reused { mesh_count, .. }
+            | Self::Checked { mesh_count, .. } => *mesh_count,
             Self::Error { .. } => 0,
         }
     }
 
     fn node_count(&self) -> usize {
         match self {
-            Self::Ok { node_count, .. } | Self::Checked { node_count, .. } => *node_count,
+            Self::Ok { node_count, .. }
+            | Self::Reused { node_count, .. }
+            | Self::Checked { node_count, .. } => *node_count,
             Self::Error { .. } => 0,
         }
     }
@@ -233,6 +257,9 @@ impl BatchItemStatus {
     fn primitive_count(&self) -> usize {
         match self {
             Self::Ok {
+                primitive_count, ..
+            }
+            | Self::Reused {
                 primitive_count, ..
             }
             | Self::Checked {
@@ -244,16 +271,18 @@ impl BatchItemStatus {
 
     fn vertex_count(&self) -> usize {
         match self {
-            Self::Ok { vertex_count, .. } | Self::Checked { vertex_count, .. } => *vertex_count,
+            Self::Ok { vertex_count, .. }
+            | Self::Reused { vertex_count, .. }
+            | Self::Checked { vertex_count, .. } => *vertex_count,
             Self::Error { .. } => 0,
         }
     }
 
     fn triangle_count(&self) -> u64 {
         match self {
-            Self::Ok { triangle_count, .. } | Self::Checked { triangle_count, .. } => {
-                *triangle_count
-            }
+            Self::Ok { triangle_count, .. }
+            | Self::Reused { triangle_count, .. }
+            | Self::Checked { triangle_count, .. } => *triangle_count,
             Self::Error { .. } => 0,
         }
     }
@@ -261,6 +290,9 @@ impl BatchItemStatus {
     fn output_size_bytes(&self) -> u64 {
         match self {
             Self::Ok {
+                output_size_bytes, ..
+            }
+            | Self::Reused {
                 output_size_bytes, ..
             } => output_size_bytes.unwrap_or(0),
             Self::Checked { .. } | Self::Error { .. } => 0,
@@ -270,6 +302,10 @@ impl BatchItemStatus {
     fn metadata_size_bytes(&self) -> u64 {
         match self {
             Self::Ok {
+                metadata_size_bytes,
+                ..
+            }
+            | Self::Reused {
                 metadata_size_bytes,
                 ..
             } => metadata_size_bytes.unwrap_or(0),
@@ -307,6 +343,13 @@ impl BatchReport {
             .count()
     }
 
+    pub fn reused_count(&self) -> usize {
+        self.items
+            .iter()
+            .filter(|item| item.status.is_reused())
+            .count()
+    }
+
     pub fn checked_count(&self) -> usize {
         self.items
             .iter()
@@ -340,6 +383,9 @@ impl BatchReport {
         json.push_str(",\n");
         json.push_str("  \"converted_count\": ");
         json.push_str(&self.converted_count().to_string());
+        json.push_str(",\n");
+        json.push_str("  \"reused_count\": ");
+        json.push_str(&self.reused_count().to_string());
         json.push_str(",\n");
         json.push_str("  \"checked_count\": ");
         json.push_str(&self.checked_count().to_string());
@@ -635,7 +681,7 @@ pub fn conversion_error_stage(error: &ConversionError) -> &'static str {
     }
 }
 
-fn run_batch_item(
+pub(crate) fn run_batch_item(
     item_index: usize,
     input_path: &Path,
     options: &BatchConversionOptions,
@@ -810,47 +856,49 @@ fn push_batch_item_json(json: &mut String, item: &BatchItem) {
             vertex_count,
             triangle_count,
         } => {
-            json.push_str("      \"status\": \"ok\",\n");
-            json.push_str("      \"importable\": true,\n");
-            json.push_str("      \"source_format\": \"");
-            json.push_str(&escape_json(source_format));
-            json.push_str("\",\n");
-            json.push_str("      \"capability\": ");
-            push_capability_for_source_format(json, Some(source_format));
-            json.push_str(",\n");
-            json.push_str("      \"output_path\": \"");
-            json.push_str(&escape_json(output_path));
-            json.push_str("\",\n");
-            json.push_str("      \"metadata_path\": ");
-            if let Some(metadata_path) = metadata_path {
-                json.push('"');
-                json.push_str(&escape_json(metadata_path));
-                json.push('"');
-            } else {
-                json.push_str("null");
-            }
-            json.push_str(",\n");
-            json.push_str("      \"output_size_bytes\": ");
-            push_optional_json_u64(json, *output_size_bytes);
-            json.push_str(",\n");
-            json.push_str("      \"metadata_size_bytes\": ");
-            push_optional_json_u64(json, *metadata_size_bytes);
-            json.push_str(",\n");
-            json.push_str("      \"node_count\": ");
-            json.push_str(&node_count.to_string());
-            json.push_str(",\n");
-            json.push_str("      \"mesh_count\": ");
-            json.push_str(&mesh_count.to_string());
-            json.push_str(",\n");
-            json.push_str("      \"primitive_count\": ");
-            json.push_str(&primitive_count.to_string());
-            json.push_str(",\n");
-            json.push_str("      \"vertex_count\": ");
-            json.push_str(&vertex_count.to_string());
-            json.push_str(",\n");
-            json.push_str("      \"triangle_count\": ");
-            json.push_str(&triangle_count.to_string());
-            json.push('\n');
+            push_successful_output_item_json(
+                json,
+                "ok",
+                "converted",
+                source_format,
+                output_path,
+                metadata_path.as_deref(),
+                *output_size_bytes,
+                *metadata_size_bytes,
+                *node_count,
+                *mesh_count,
+                *primitive_count,
+                *vertex_count,
+                *triangle_count,
+            );
+        }
+        BatchItemStatus::Reused {
+            source_format,
+            output_path,
+            metadata_path,
+            output_size_bytes,
+            metadata_size_bytes,
+            node_count,
+            mesh_count,
+            primitive_count,
+            vertex_count,
+            triangle_count,
+        } => {
+            push_successful_output_item_json(
+                json,
+                "reused",
+                "reused",
+                source_format,
+                output_path,
+                metadata_path.as_deref(),
+                *output_size_bytes,
+                *metadata_size_bytes,
+                *node_count,
+                *mesh_count,
+                *primitive_count,
+                *vertex_count,
+                *triangle_count,
+            );
         }
         BatchItemStatus::Checked {
             source_format,
@@ -861,6 +909,7 @@ fn push_batch_item_json(json: &mut String, item: &BatchItem) {
             triangle_count,
         } => {
             json.push_str("      \"status\": \"checked\",\n");
+            json.push_str("      \"operation\": \"checked\",\n");
             json.push_str("      \"importable\": true,\n");
             json.push_str("      \"source_format\": \"");
             json.push_str(&escape_json(source_format));
@@ -894,6 +943,7 @@ fn push_batch_item_json(json: &mut String, item: &BatchItem) {
             message,
         } => {
             json.push_str("      \"status\": \"error\",\n");
+            json.push_str("      \"operation\": \"error\",\n");
             json.push_str("      \"importable\": false,\n");
             json.push_str("      \"output_size_bytes\": null,\n");
             json.push_str("      \"metadata_size_bytes\": null,\n");
@@ -944,6 +994,70 @@ fn push_batch_item_json(json: &mut String, item: &BatchItem) {
         }
     }
     json.push_str("    }");
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_successful_output_item_json(
+    json: &mut String,
+    status: &str,
+    operation: &str,
+    source_format: &str,
+    output_path: &str,
+    metadata_path: Option<&str>,
+    output_size_bytes: Option<u64>,
+    metadata_size_bytes: Option<u64>,
+    node_count: usize,
+    mesh_count: usize,
+    primitive_count: usize,
+    vertex_count: usize,
+    triangle_count: u64,
+) {
+    json.push_str("      \"status\": \"");
+    json.push_str(status);
+    json.push_str("\",\n");
+    json.push_str("      \"operation\": \"");
+    json.push_str(operation);
+    json.push_str("\",\n");
+    json.push_str("      \"importable\": true,\n");
+    json.push_str("      \"source_format\": \"");
+    json.push_str(&escape_json(source_format));
+    json.push_str("\",\n");
+    json.push_str("      \"capability\": ");
+    push_capability_for_source_format(json, Some(source_format));
+    json.push_str(",\n");
+    json.push_str("      \"output_path\": \"");
+    json.push_str(&escape_json(output_path));
+    json.push_str("\",\n");
+    json.push_str("      \"metadata_path\": ");
+    if let Some(metadata_path) = metadata_path {
+        json.push('"');
+        json.push_str(&escape_json(metadata_path));
+        json.push('"');
+    } else {
+        json.push_str("null");
+    }
+    json.push_str(",\n");
+    json.push_str("      \"output_size_bytes\": ");
+    push_optional_json_u64(json, output_size_bytes);
+    json.push_str(",\n");
+    json.push_str("      \"metadata_size_bytes\": ");
+    push_optional_json_u64(json, metadata_size_bytes);
+    json.push_str(",\n");
+    json.push_str("      \"node_count\": ");
+    json.push_str(&node_count.to_string());
+    json.push_str(",\n");
+    json.push_str("      \"mesh_count\": ");
+    json.push_str(&mesh_count.to_string());
+    json.push_str(",\n");
+    json.push_str("      \"primitive_count\": ");
+    json.push_str(&primitive_count.to_string());
+    json.push_str(",\n");
+    json.push_str("      \"vertex_count\": ");
+    json.push_str(&vertex_count.to_string());
+    json.push_str(",\n");
+    json.push_str("      \"triangle_count\": ");
+    json.push_str(&triangle_count.to_string());
+    json.push('\n');
 }
 
 fn push_capability_for_source_format(json: &mut String, source_format: Option<&str>) {
