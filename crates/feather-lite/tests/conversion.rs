@@ -3097,6 +3097,97 @@ fn tessellates_spherical_step_face_with_inner_bound() {
 }
 
 #[test]
+fn tessellates_spherical_step_face_with_bspline_edge() {
+    let step = include_bytes!("../../../tests/fixtures/sample_ap214_spherical_bspline_brep.step");
+    let input = InputFile::new(Some(std::path::Path::new("sphere-bspline.step")), step);
+
+    let document = ImporterRegistry::default()
+        .import(
+            &input,
+            &ImportOptions {
+                max_lod_error: 0.02,
+                ..ImportOptions::default()
+            },
+        )
+        .expect("spherical ADVANCED_FACE with a rational B-Spline boundary should tessellate");
+
+    validate_document(&document).expect("spherical B-Spline STEP document should validate");
+    assert_eq!(document.metadata.mode, "step-brep-tessellated");
+    assert!(document.metadata.triangle_count > 8);
+    assert_close(document.meshes[0].bbox.min[0], 0.0);
+    assert_close(document.meshes[0].bbox.min[1], 0.0);
+    assert_close(document.meshes[0].bbox.min[2], 0.0);
+    assert_eq!(document.meshes[0].bbox.max[0], 0.001);
+    assert_eq!(document.meshes[0].bbox.max[1], 0.001);
+    assert_close(document.meshes[0].bbox.max[2], 0.0007071068);
+}
+
+#[test]
+fn tessellates_spherical_step_face_with_trimmed_bspline_edge() {
+    let fixture = String::from_utf8(
+        include_bytes!("../../../tests/fixtures/sample_ap214_spherical_bspline_brep.step")
+            .to_vec(),
+    )
+    .expect("fixture should be UTF-8")
+    .replace(
+        "#62=(BOUNDED_CURVE() B_SPLINE_CURVE(2,(#12,#16,#13),.UNSPECIFIED.,.F.,.F.) B_SPLINE_CURVE_WITH_KNOTS((3,3),(0.,1.),.UNSPECIFIED.) CURVE() GEOMETRIC_REPRESENTATION_ITEM() RATIONAL_B_SPLINE_CURVE((1.,0.7071067811865476,1.)) REPRESENTATION_ITEM(''));",
+        "#62=(BOUNDED_CURVE() B_SPLINE_CURVE(2,(#12,#16,#13),.UNSPECIFIED.,.F.,.F.) B_SPLINE_CURVE_WITH_KNOTS((3,3),(0.,1.),.UNSPECIFIED.) CURVE() GEOMETRIC_REPRESENTATION_ITEM() RATIONAL_B_SPLINE_CURVE((1.,0.7071067811865476,1.)) REPRESENTATION_ITEM(''));\n#64=TRIMMED_CURVE('',#62,(PARAMETER_VALUE(0.)),(PARAMETER_VALUE(1.)),.T.,.PARAMETER.);",
+    )
+    .replace("#72=EDGE_CURVE('',#22,#23,#62,.T.);", "#72=EDGE_CURVE('',#22,#23,#64,.T.);");
+    let input = InputFile::new(
+        Some(std::path::Path::new("sphere-trimmed-bspline.step")),
+        fixture.as_bytes(),
+    );
+
+    let document = ImporterRegistry::default()
+        .import(
+            &input,
+            &ImportOptions {
+                max_lod_error: 0.02,
+                ..ImportOptions::default()
+            },
+        )
+        .expect("spherical ADVANCED_FACE with a trimmed B-Spline boundary should tessellate");
+
+    validate_document(&document).expect("trimmed B-Spline sphere STEP document should validate");
+    assert!(document.metadata.triangle_count > 8);
+    assert_eq!(document.meshes[0].bbox.max[0], 0.001);
+    assert_eq!(document.meshes[0].bbox.max[1], 0.001);
+    assert_close(document.meshes[0].bbox.max[2], 0.0007071068);
+}
+
+#[test]
+fn rejects_spherical_bspline_boundary_that_leaves_surface() {
+    let fixture = String::from_utf8(
+        include_bytes!("../../../tests/fixtures/sample_ap214_spherical_bspline_brep.step").to_vec(),
+    )
+    .expect("fixture should be UTF-8")
+    .replace(
+        "#16=CARTESIAN_POINT('',(0.707106781,0.707106781,0.707106781));",
+        "#16=CARTESIAN_POINT('',(0.707106781,0.9,0.707106781));",
+    );
+    let input = InputFile::new(
+        Some(std::path::Path::new("sphere-off-surface-bspline.step")),
+        fixture.as_bytes(),
+    );
+
+    let error = ImporterRegistry::default()
+        .import(
+            &input,
+            &ImportOptions {
+                max_lod_error: 0.002,
+                ..ImportOptions::default()
+            },
+        )
+        .expect_err("off-surface B-Spline boundary must fail surface validation");
+    assert!(matches!(
+        error,
+        ImportError::InvalidData(ref reason)
+            if reason.contains("boundary does not lie on SPHERICAL_SURFACE")
+    ));
+}
+
+#[test]
 fn rejects_line_boundary_on_spherical_surface() {
     let fixture = String::from_utf8(
         include_bytes!("../../../tests/fixtures/sample_ap214_spherical_brep.step").to_vec(),
@@ -3205,6 +3296,61 @@ fn tessellates_toroidal_step_face_with_inner_bound() {
 
     validate_document(&document).expect("toroidal STEP face with a hole should validate");
     assert_eq!(document.metadata.triangle_count, 17);
+    assert_eq!(document.meshes[0].bbox.max, [0.003, 0.003, 0.001]);
+}
+
+#[test]
+fn tessellates_toroidal_step_face_with_bspline_edge() {
+    let step = include_bytes!("../../../tests/fixtures/sample_ap214_toroidal_bspline_brep.step");
+    let input = InputFile::new(Some(std::path::Path::new("torus-bspline.step")), step);
+
+    let document = ImporterRegistry::default()
+        .import(
+            &input,
+            &ImportOptions {
+                max_lod_error: 0.02,
+                ..ImportOptions::default()
+            },
+        )
+        .expect("toroidal ADVANCED_FACE with a rational B-Spline boundary should tessellate");
+
+    validate_document(&document).expect("toroidal B-Spline STEP document should validate");
+    assert_eq!(document.metadata.mode, "step-brep-tessellated");
+    assert!(document.metadata.triangle_count > 9);
+    assert_close(document.meshes[0].bbox.min[0], 0.0);
+    assert_close(document.meshes[0].bbox.min[1], 0.0);
+    assert_close(document.meshes[0].bbox.min[2], 0.0);
+    assert_eq!(document.meshes[0].bbox.max, [0.003, 0.003, 0.001]);
+}
+
+#[test]
+fn tessellates_toroidal_step_face_with_trimmed_bspline_edge() {
+    let fixture = String::from_utf8(
+        include_bytes!("../../../tests/fixtures/sample_ap214_toroidal_bspline_brep.step").to_vec(),
+    )
+    .expect("fixture should be UTF-8")
+    .replace(
+        "#62=(BOUNDED_CURVE() B_SPLINE_CURVE(2,(#12,#18,#13),.UNSPECIFIED.,.F.,.F.) B_SPLINE_CURVE_WITH_KNOTS((3,3),(0.,1.),.UNSPECIFIED.) CURVE() GEOMETRIC_REPRESENTATION_ITEM() RATIONAL_B_SPLINE_CURVE((1.,0.7071067811865476,1.)) REPRESENTATION_ITEM(''));",
+        "#62=(BOUNDED_CURVE() B_SPLINE_CURVE(2,(#12,#18,#13),.UNSPECIFIED.,.F.,.F.) B_SPLINE_CURVE_WITH_KNOTS((3,3),(0.,1.),.UNSPECIFIED.) CURVE() GEOMETRIC_REPRESENTATION_ITEM() RATIONAL_B_SPLINE_CURVE((1.,0.7071067811865476,1.)) REPRESENTATION_ITEM(''));\n#64=TRIMMED_CURVE('',#62,(PARAMETER_VALUE(0.)),(PARAMETER_VALUE(1.)),.T.,.PARAMETER.);",
+    )
+    .replace("#72=EDGE_CURVE('',#22,#23,#62,.T.);", "#72=EDGE_CURVE('',#22,#23,#64,.T.);");
+    let input = InputFile::new(
+        Some(std::path::Path::new("torus-trimmed-bspline.step")),
+        fixture.as_bytes(),
+    );
+
+    let document = ImporterRegistry::default()
+        .import(
+            &input,
+            &ImportOptions {
+                max_lod_error: 0.02,
+                ..ImportOptions::default()
+            },
+        )
+        .expect("toroidal ADVANCED_FACE with a trimmed B-Spline boundary should tessellate");
+
+    validate_document(&document).expect("trimmed B-Spline torus STEP document should validate");
+    assert!(document.metadata.triangle_count > 9);
     assert_eq!(document.meshes[0].bbox.max, [0.003, 0.003, 0.001]);
 }
 

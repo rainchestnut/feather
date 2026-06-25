@@ -2197,17 +2197,28 @@ fn validate_spherical_loop_geometry(
     let loop_record = require_record(records, loop_id, "spherical face loop")?;
     if loop_record.kind != "EDGE_LOOP" {
         return Err(unsupported(format!(
-            "#{face_id} SPHERICAL_SURFACE requires EDGE_LOOP topology with CIRCLE edges"
+            "#{face_id} SPHERICAL_SURFACE requires EDGE_LOOP topology with supported curve edges"
         )));
     }
     for resolved in resolve_loop_edge_geometries(loop_record, records, "spherical edge")? {
-        if resolved.geometry.kind != "CIRCLE" {
-            return Err(unsupported(format!(
-                "#{} SPHERICAL_SURFACE boundary uses {}; only CIRCLE edges are supported",
-                resolved.edge.id, resolved.geometry.kind
-            )));
+        match resolved.geometry.kind.as_str() {
+            "CIRCLE" => validate_spherical_circle_edge(
+                resolved.edge.id,
+                resolved.geometry,
+                sphere,
+                records,
+            )?,
+            _ if is_bspline_curve_with_knots(resolved.geometry) => {
+                // B-Spline boundary samples are checked against the sphere in
+                // the projection pass, which keeps this topology gate narrow.
+            }
+            kind => {
+                return Err(unsupported(format!(
+                    "#{} SPHERICAL_SURFACE boundary uses unsupported edge geometry {kind}",
+                    resolved.edge.id
+                )));
+            }
         }
-        validate_spherical_circle_edge(resolved.edge.id, resolved.geometry, sphere, records)?;
     }
     Ok(())
 }
@@ -2265,7 +2276,7 @@ fn resolve_torus(
     })
 }
 
-/// Restricts torus boundaries to canonical parallels and meridians.
+/// Validates torus boundary families before projection into the two-angle domain.
 fn validate_toroidal_loop_geometry(
     loop_id: usize,
     torus: TorusGeometry,
@@ -2275,17 +2286,25 @@ fn validate_toroidal_loop_geometry(
     let loop_record = require_record(records, loop_id, "toroidal face loop")?;
     if loop_record.kind != "EDGE_LOOP" {
         return Err(unsupported(format!(
-            "#{face_id} TOROIDAL_SURFACE requires EDGE_LOOP topology with CIRCLE edges"
+            "#{face_id} TOROIDAL_SURFACE requires EDGE_LOOP topology with supported curve edges"
         )));
     }
     for resolved in resolve_loop_edge_geometries(loop_record, records, "toroidal edge")? {
-        if resolved.geometry.kind != "CIRCLE" {
-            return Err(unsupported(format!(
-                "#{} TOROIDAL_SURFACE boundary uses {}; only meridian and parallel CIRCLE edges are supported",
-                resolved.edge.id, resolved.geometry.kind
-            )));
+        match resolved.geometry.kind.as_str() {
+            "CIRCLE" => {
+                validate_toroidal_circle_edge(resolved.edge.id, resolved.geometry, torus, records)?
+            }
+            _ if is_bspline_curve_with_knots(resolved.geometry) => {
+                // The torus projection validates every sampled point against
+                // the ring-torus equation before constrained triangulation.
+            }
+            kind => {
+                return Err(unsupported(format!(
+                    "#{} TOROIDAL_SURFACE boundary uses unsupported edge geometry {kind}",
+                    resolved.edge.id
+                )));
+            }
         }
-        validate_toroidal_circle_edge(resolved.edge.id, resolved.geometry, torus, records)?;
     }
     Ok(())
 }
