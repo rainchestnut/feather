@@ -2412,7 +2412,7 @@ fn validate_revolved_loop_geometry(
     let loop_record = require_record(records, loop_id, "surface-of-revolution face loop")?;
     if loop_record.kind != "EDGE_LOOP" {
         return Err(unsupported(format!(
-            "#{face_id} {} requires EDGE_LOOP topology with analytic edges",
+            "#{face_id} {} requires EDGE_LOOP topology with supported curve edges",
             surface.kind.step_name()
         )));
     }
@@ -2429,6 +2429,11 @@ fn validate_revolved_loop_geometry(
                 surface,
                 records,
             )?,
+            _ if is_bspline_curve_with_knots(resolved.geometry) => {
+                // B-Spline samples are validated against the surface before
+                // triangulation, so this topology pass only needs to admit the
+                // curve family after endpoint and resource checks have run.
+            }
             kind => {
                 return Err(unsupported(format!(
                     "#{} uses unsupported {} edge geometry {kind}",

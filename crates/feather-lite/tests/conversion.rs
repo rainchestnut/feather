@@ -2792,6 +2792,82 @@ fn tessellates_cylindrical_step_face_with_trimmed_circle_edge() {
 }
 
 #[test]
+fn tessellates_cylindrical_step_face_with_bspline_edge() {
+    let step = include_bytes!("../../../tests/fixtures/sample_ap214_cylindrical_bspline_brep.step");
+    let input = InputFile::new(Some(std::path::Path::new("cylindrical-bspline.step")), step);
+
+    let document = ImporterRegistry::default()
+        .import(
+            &input,
+            &ImportOptions {
+                max_lod_error: 0.02,
+                ..ImportOptions::default()
+            },
+        )
+        .expect("cylindrical ADVANCED_FACE with a rational B-Spline boundary should tessellate");
+
+    validate_document(&document).expect("cylindrical B-Spline STEP document should validate");
+    assert_eq!(document.metadata.mode, "step-brep-tessellated");
+    assert!(document.metadata.triangle_count > 2);
+    assert_eq!(document.meshes[0].bbox.min, [0.0, 0.0, 0.0]);
+    assert_eq!(document.meshes[0].bbox.max, [0.001, 0.001, 0.002]);
+}
+
+#[test]
+fn tessellates_conical_step_face_with_bspline_edge() {
+    let step = include_bytes!("../../../tests/fixtures/sample_ap214_conical_bspline_brep.step");
+    let input = InputFile::new(Some(std::path::Path::new("conical-bspline.step")), step);
+
+    let document = ImporterRegistry::default()
+        .import(
+            &input,
+            &ImportOptions {
+                max_lod_error: 0.02,
+                ..ImportOptions::default()
+            },
+        )
+        .expect("conical ADVANCED_FACE with a rational B-Spline boundary should tessellate");
+
+    validate_document(&document).expect("conical B-Spline STEP document should validate");
+    assert_eq!(document.metadata.mode, "step-brep-tessellated");
+    assert!(document.metadata.triangle_count > 2);
+    assert_eq!(document.meshes[0].bbox.min, [0.0, 0.0, 0.0]);
+    assert_eq!(document.meshes[0].bbox.max, [0.002, 0.002, 0.002]);
+}
+
+#[test]
+fn tessellates_cylindrical_step_face_with_trimmed_bspline_edge() {
+    let fixture = String::from_utf8(
+        include_bytes!("../../../tests/fixtures/sample_ap214_cylindrical_bspline_brep.step")
+            .to_vec(),
+    )
+    .expect("fixture should be UTF-8")
+    .replace(
+        "#62=(BOUNDED_CURVE() B_SPLINE_CURVE(2,(#12,#15,#13),.UNSPECIFIED.,.F.,.F.) B_SPLINE_CURVE_WITH_KNOTS((3,3),(0.,1.),.UNSPECIFIED.) CURVE() GEOMETRIC_REPRESENTATION_ITEM() RATIONAL_B_SPLINE_CURVE((1.,0.7071067811865476,1.)) REPRESENTATION_ITEM(''));",
+        "#62=(BOUNDED_CURVE() B_SPLINE_CURVE(2,(#12,#15,#13),.UNSPECIFIED.,.F.,.F.) B_SPLINE_CURVE_WITH_KNOTS((3,3),(0.,1.),.UNSPECIFIED.) CURVE() GEOMETRIC_REPRESENTATION_ITEM() RATIONAL_B_SPLINE_CURVE((1.,0.7071067811865476,1.)) REPRESENTATION_ITEM(''));\n#64=TRIMMED_CURVE('',#62,(PARAMETER_VALUE(0.)),(PARAMETER_VALUE(1.)),.T.,.PARAMETER.);",
+    )
+    .replace("#72=EDGE_CURVE('',#22,#23,#62,.T.);", "#72=EDGE_CURVE('',#22,#23,#64,.T.);");
+    let input = InputFile::new(
+        Some(std::path::Path::new("cylindrical-trimmed-bspline.step")),
+        fixture.as_bytes(),
+    );
+
+    let document = ImporterRegistry::default()
+        .import(
+            &input,
+            &ImportOptions {
+                max_lod_error: 0.02,
+                ..ImportOptions::default()
+            },
+        )
+        .expect("cylindrical ADVANCED_FACE with a trimmed B-Spline boundary should tessellate");
+
+    validate_document(&document).expect("trimmed B-Spline cylinder STEP document should validate");
+    assert!(document.metadata.triangle_count > 2);
+    assert_eq!(document.meshes[0].bbox.max, [0.001, 0.001, 0.002]);
+}
+
+#[test]
 fn rejects_trimmed_analytic_curve_when_vertices_do_not_match_trim_parameters() {
     let fixture = String::from_utf8(
         include_bytes!("../../../tests/fixtures/sample_ap214_planar_trimmed_circle_brep.step")

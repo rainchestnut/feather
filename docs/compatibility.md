@@ -45,9 +45,10 @@ of extension recognition.
 STEP B-Rep promotion requires closed-shell fixtures with shared edges, concave
 faces, face orientation, presentation colors, explicit units, configurable
 curve precision, resource limits, and malformed topology. Implemented analytic
-curves and surfaces, closed-edge loops, and unit families must have positive
-and negative corpus coverage. Unsupported geometry and inner bounds must
-continue to fail without partial output.
+curves and surfaces, rational/non-rational B-Spline boundaries on supported
+faces, closed-edge loops, and unit families must have positive and negative
+corpus coverage. Unsupported geometry and inner bounds must continue to fail
+without partial output.
 
 ## Promotion Gate
 
