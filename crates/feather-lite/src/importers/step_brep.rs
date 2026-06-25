@@ -126,6 +126,13 @@ impl RevolvedSurfaceGeometry {
     }
 }
 
+/// Supported `SURFACE_OF_LINEAR_EXTRUSION` forms normalized to existing solvers.
+#[derive(Clone, Copy)]
+enum LinearExtrusionSurfaceGeometry {
+    Plane { origin: [f32; 3], normal: [f32; 3] },
+    Cylinder(RevolvedSurfaceGeometry),
+}
+
 /// Faces owned by one reusable STEP solid, or one fallback ungrouped face set.
 struct BrepFaceGroup<'a> {
     solid_id: Option<usize>,
@@ -353,9 +360,12 @@ fn append_brep_face(
         "TOROIDAL_SURFACE" => {
             tessellate_toroidal_face(&boundaries, surface, same_sense, records, face.id)?
         }
+        "SURFACE_OF_LINEAR_EXTRUSION" => {
+            tessellate_linear_extrusion_face(&boundaries, surface, same_sense, records, face.id)?
+        }
         kind => {
             return Err(unsupported(format!(
-                "#{} ADVANCED_FACE uses {kind} surface; supported surfaces are PLANE, CYLINDRICAL_SURFACE, CONICAL_SURFACE, SPHERICAL_SURFACE, and TOROIDAL_SURFACE",
+                "#{} ADVANCED_FACE uses {kind} surface; supported surfaces are PLANE, CYLINDRICAL_SURFACE, CONICAL_SURFACE, SPHERICAL_SURFACE, TOROIDAL_SURFACE, and LINE/CIRCLE SURFACE_OF_LINEAR_EXTRUSION",
                 face.id
             )));
         }
@@ -451,7 +461,17 @@ fn tessellate_planar_face(
     records: &HashMap<usize, &StepRecord>,
     face_id: usize,
 ) -> Result<(Vec<u32>, Vec<[f32; 3]>), ImportError> {
-    let (plane_origin, mut plane_normal) = resolve_plane(surface, records)?;
+    let (plane_origin, plane_normal) = resolve_plane(surface, records)?;
+    tessellate_planar_geometry(boundaries, plane_origin, plane_normal, same_sense, face_id)
+}
+
+fn tessellate_planar_geometry(
+    boundaries: &ResolvedFaceBoundaries,
+    plane_origin: [f32; 3],
+    mut plane_normal: [f32; 3],
+    same_sense: bool,
+    face_id: usize,
+) -> Result<(Vec<u32>, Vec<[f32; 3]>), ImportError> {
     if !same_sense {
         plane_normal = scale3(plane_normal, -1.0);
     }
@@ -471,6 +491,19 @@ fn tessellate_revolved_face(
     face_id: usize,
 ) -> Result<(Vec<u32>, Vec<[f32; 3]>), ImportError> {
     let geometry = resolve_revolved_surface(surface, records, plane_angle_unit)?;
+    tessellate_revolved_geometry(
+        boundaries, geometry, same_sense, records, surface.id, face_id,
+    )
+}
+
+fn tessellate_revolved_geometry(
+    boundaries: &ResolvedFaceBoundaries,
+    geometry: RevolvedSurfaceGeometry,
+    same_sense: bool,
+    records: &HashMap<usize, &StepRecord>,
+    surface_id: usize,
+    face_id: usize,
+) -> Result<(Vec<u32>, Vec<[f32; 3]>), ImportError> {
     let AxisPlacement {
         origin,
         axis,
@@ -501,7 +534,7 @@ fn tessellate_revolved_face(
                 return Err(ImportError::InvalidData(format!(
                     "#{face_id} ADVANCED_FACE boundary does not lie on {} #{}",
                     geometry.kind.step_name(),
-                    surface.id
+                    surface_id
                 )));
             }
             let radial_direction = scale3(radial, 1.0 / radial_length);
@@ -545,6 +578,23 @@ fn tessellate_revolved_face(
         face_id,
     )?;
     Ok((indices, normals))
+}
+
+fn tessellate_linear_extrusion_face(
+    boundaries: &ResolvedFaceBoundaries,
+    surface: &StepRecord,
+    same_sense: bool,
+    records: &HashMap<usize, &StepRecord>,
+    face_id: usize,
+) -> Result<(Vec<u32>, Vec<[f32; 3]>), ImportError> {
+    match resolve_linear_extrusion_surface(surface, records)? {
+        LinearExtrusionSurfaceGeometry::Plane { origin, normal } => {
+            tessellate_planar_geometry(boundaries, origin, normal, same_sense, face_id)
+        }
+        LinearExtrusionSurfaceGeometry::Cylinder(geometry) => tessellate_revolved_geometry(
+            boundaries, geometry, same_sense, records, surface.id, face_id,
+        ),
+    }
 }
 
 fn tessellate_spherical_face(
@@ -2037,15 +2087,7 @@ fn validate_line_geometry(
     records: &HashMap<usize, &StepRecord>,
     edge_id: usize,
 ) -> Result<(), ImportError> {
-    let args = require_args(line, 3)?;
-    let line_origin_id = parse_reference(args[1]).ok_or_else(|| {
-        ImportError::InvalidData(format!("#{} LINE has no point reference", line.id))
-    })?;
-    let vector_id = parse_reference(args[2]).ok_or_else(|| {
-        ImportError::InvalidData(format!("#{} LINE has no vector reference", line.id))
-    })?;
-    let line_origin = resolve_cartesian_point(line_origin_id, records)?;
-    let line_direction = resolve_vector_direction(vector_id, records)?;
+    let (line_origin, line_direction) = resolve_line_origin_and_direction(line, records)?;
     let start = resolve_vertex_point(start_vertex_id, records)?;
     let end = resolve_vertex_point(end_vertex_id, records)?;
     if points_equal(start, end) {
@@ -2072,6 +2114,23 @@ fn validate_line_geometry(
         )));
     }
     Ok(())
+}
+
+fn resolve_line_origin_and_direction(
+    line: &StepRecord,
+    records: &HashMap<usize, &StepRecord>,
+) -> Result<([f32; 3], [f32; 3]), ImportError> {
+    let args = require_args(line, 3)?;
+    let line_origin_id = parse_reference(args[1]).ok_or_else(|| {
+        ImportError::InvalidData(format!("#{} LINE has no point reference", line.id))
+    })?;
+    let vector_id = parse_reference(args[2]).ok_or_else(|| {
+        ImportError::InvalidData(format!("#{} LINE has no vector reference", line.id))
+    })?;
+    Ok((
+        resolve_cartesian_point(line_origin_id, records)?,
+        resolve_vector_direction(vector_id, records)?,
+    ))
 }
 
 fn line_point_at_parameter(
@@ -2169,6 +2228,77 @@ fn resolve_plane(
     })?;
     let placement = resolve_axis2_placement(placement_id, records)?;
     Ok((placement.origin, placement.axis))
+}
+
+fn resolve_linear_extrusion_surface(
+    surface: &StepRecord,
+    records: &HashMap<usize, &StepRecord>,
+) -> Result<LinearExtrusionSurfaceGeometry, ImportError> {
+    let args = require_args(surface, 3)?;
+    let swept_curve_id = parse_reference(args[1]).ok_or_else(|| {
+        ImportError::InvalidData(format!(
+            "#{} SURFACE_OF_LINEAR_EXTRUSION has no swept curve reference",
+            surface.id
+        ))
+    })?;
+    let extrusion_axis_id = parse_reference(args[2]).ok_or_else(|| {
+        ImportError::InvalidData(format!(
+            "#{} SURFACE_OF_LINEAR_EXTRUSION has no extrusion axis reference",
+            surface.id
+        ))
+    })?;
+    let extrusion_direction = resolve_vector_direction(extrusion_axis_id, records)?;
+    let swept_curve = require_record(records, swept_curve_id, "linear extrusion swept curve")?;
+    match swept_curve.kind.as_str() {
+        "LINE" => {
+            let (line_origin, line_direction) =
+                resolve_line_origin_and_direction(swept_curve, records)?;
+            let normal = normalize3(cross3(line_direction, extrusion_direction)).ok_or_else(|| {
+                unsupported(format!(
+                    "#{} SURFACE_OF_LINEAR_EXTRUSION LINE sweep is degenerate because the extrusion axis is parallel to the line",
+                    surface.id
+                ))
+            })?;
+            Ok(LinearExtrusionSurfaceGeometry::Plane {
+                origin: line_origin,
+                normal,
+            })
+        }
+        "CIRCLE" => {
+            let circle = resolve_circle(swept_curve, records)?;
+            let axis_alignment = dot3(circle.placement.axis, extrusion_direction).abs();
+            if axis_alignment < 1.0 - 1.0e-5 {
+                return Err(unsupported(format!(
+                    "#{} SURFACE_OF_LINEAR_EXTRUSION CIRCLE sweep axis must be parallel to the circle axis",
+                    surface.id
+                )));
+            }
+            let x_axis = circle.placement.x_axis;
+            let y_axis = normalize3(cross3(extrusion_direction, x_axis)).ok_or_else(|| {
+                ImportError::InvalidData(format!(
+                    "#{} SURFACE_OF_LINEAR_EXTRUSION has an invalid cylindrical basis",
+                    surface.id
+                ))
+            })?;
+            Ok(LinearExtrusionSurfaceGeometry::Cylinder(
+                RevolvedSurfaceGeometry {
+                    placement: AxisPlacement {
+                        origin: circle.placement.origin,
+                        axis: extrusion_direction,
+                        x_axis,
+                        y_axis,
+                    },
+                    reference_radius: circle.radius,
+                    radial_slope: 0.0,
+                    kind: RevolvedSurfaceKind::Cylinder,
+                },
+            ))
+        }
+        kind => Err(unsupported(format!(
+            "#{} SURFACE_OF_LINEAR_EXTRUSION sweeps unsupported curve {kind}; supported swept curves are LINE and CIRCLE",
+            surface.id
+        ))),
+    }
 }
 
 fn resolve_sphere(

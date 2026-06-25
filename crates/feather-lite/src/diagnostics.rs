@@ -56,7 +56,7 @@ pub(crate) fn required_condition_for_failure(
             "reduce input/container size or raise ImportLimits after validating trusted workload requirements",
         ),
         "tessellation_pending" => Some(
-            "use AP242 tessellated data, ADVANCED_FACE B-Rep with bounded outer/inner LINE/CIRCLE/ELLIPSE loops or parameter TRIMMED_CURVE spans on supported analytic surfaces, B_SPLINE_CURVE_WITH_KNOTS boundaries or parameter TRIMMED_CURVE spans on supported analytic faces, regular ring TOROIDAL_SURFACE with meridian/parallel circles, rigid ITEM_DEFINED_TRANSFORMATION shape-representation assemblies, or an embedded tessellation cache; other analytic, spline, singular, and transformed representations require upstream tessellation",
+            "use AP242 tessellated data, ADVANCED_FACE B-Rep with bounded outer/inner LINE/CIRCLE/ELLIPSE loops or parameter TRIMMED_CURVE spans on supported analytic surfaces, LINE/CIRCLE SURFACE_OF_LINEAR_EXTRUSION, B_SPLINE_CURVE_WITH_KNOTS boundaries or parameter TRIMMED_CURVE spans on supported analytic faces, regular ring TOROIDAL_SURFACE with meridian/parallel circles, rigid ITEM_DEFINED_TRANSFORMATION shape-representation assemblies, or an embedded tessellation cache; other analytic, spline, singular, and transformed representations require upstream tessellation",
         ),
         "unsupported_input" => {
             Some("use a supported source format or embed a readable Feather Lite cache payload")

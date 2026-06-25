@@ -3040,6 +3040,83 @@ fn rejects_step_ellipse_vertex_outside_curve() {
 }
 
 #[test]
+fn tessellates_linear_extrusion_plane_step_face() {
+    let step =
+        include_bytes!("../../../tests/fixtures/sample_ap214_linear_extrusion_plane_brep.step");
+    let input = InputFile::new(
+        Some(std::path::Path::new("linear-extrusion-plane.step")),
+        step,
+    );
+
+    let document = ImporterRegistry::default()
+        .import(&input, &ImportOptions::default())
+        .expect("LINE SURFACE_OF_LINEAR_EXTRUSION should tessellate as a plane");
+
+    validate_document(&document).expect("linear-extrusion plane STEP document should validate");
+    assert_eq!(document.metadata.mode, "step-brep-tessellated");
+    assert_eq!(document.metadata.triangle_count, 2);
+    assert_eq!(document.meshes[0].bbox.min, [0.0, 0.0, 0.0]);
+    assert_eq!(document.meshes[0].bbox.max, [0.002, 0.001, 0.0]);
+}
+
+#[test]
+fn tessellates_linear_extrusion_cylinder_step_face() {
+    let step =
+        include_bytes!("../../../tests/fixtures/sample_ap214_linear_extrusion_cylinder_brep.step");
+    let input = InputFile::new(
+        Some(std::path::Path::new("linear-extrusion-cylinder.step")),
+        step,
+    );
+
+    let document = ImporterRegistry::default()
+        .import(
+            &input,
+            &ImportOptions {
+                max_lod_error: 0.1,
+                ..ImportOptions::default()
+            },
+        )
+        .expect("CIRCLE SURFACE_OF_LINEAR_EXTRUSION should tessellate as a cylinder");
+
+    validate_document(&document).expect("linear-extrusion cylinder STEP document should validate");
+    assert_eq!(document.metadata.mode, "step-brep-tessellated");
+    assert_eq!(document.metadata.triangle_count, 8);
+    assert_eq!(document.meshes[0].bbox.min[0], -0.001);
+    assert_eq!(document.meshes[0].bbox.max[0], 0.001);
+    assert_eq!(document.meshes[0].bbox.max[2], 0.002);
+}
+
+#[test]
+fn rejects_skew_circle_linear_extrusion_surface() {
+    let fixture = String::from_utf8(
+        include_bytes!("../../../tests/fixtures/sample_ap214_linear_extrusion_cylinder_brep.step")
+            .to_vec(),
+    )
+    .expect("fixture should be UTF-8")
+    .replace(
+        "#32=DIRECTION('',(0.,0.,-1.));",
+        "#32=DIRECTION('',(0.,0.,-1.));\n#33=DIRECTION('',(1.,0.,1.));\n#42=VECTOR('',#33,1.);",
+    )
+    .replace(
+        "#100=SURFACE_OF_LINEAR_EXTRUSION('',#60,#40);",
+        "#100=SURFACE_OF_LINEAR_EXTRUSION('',#60,#42);",
+    );
+    let input = InputFile::new(
+        Some(std::path::Path::new("skew-circle-extrusion.step")),
+        fixture.as_bytes(),
+    );
+
+    let error = ImporterRegistry::default()
+        .import(&input, &ImportOptions::default())
+        .expect_err("skew circle linear extrusion must not be treated as a right cylinder");
+    assert!(matches!(
+        error,
+        ImportError::TessellationUnsupported { ref reason, .. }
+            if reason.contains("CIRCLE sweep axis must be parallel")
+    ));
+}
+
+#[test]
 fn tessellates_spherical_step_face_with_circular_boundaries() {
     let step = include_bytes!("../../../tests/fixtures/sample_ap214_spherical_brep.step");
     let input = InputFile::new(Some(std::path::Path::new("sphere.step")), step);

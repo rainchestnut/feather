@@ -338,6 +338,18 @@ fn converts_analytic_step_geometry() {
             "0.05",
             4_u64,
         ),
+        (
+            "sample_ap214_linear_extrusion_plane_brep.step",
+            "linear-extrusion-plane",
+            "0.1",
+            2_u64,
+        ),
+        (
+            "sample_ap214_linear_extrusion_cylinder_brep.step",
+            "linear-extrusion-cylinder",
+            "0.1",
+            8_u64,
+        ),
     ];
 
     for (fixture_name, output_name, chord_error, triangle_count) in cases {
