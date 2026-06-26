@@ -221,6 +221,8 @@ println!("{}", package_audit.usable);
 let package_summary = read_asset_package_summary("./asset-package")?;
 println!("{}", package_summary.items.len());
 println!("{}", package_summary.business_status().state.as_str());
+println!("{}", package_summary.business_status().to_json_string());
+println!("{}", package_summary.to_json_string());
 
 let batch_asset_request = BatchAssetConversionRequest::new(
     vec![PathBuf::from("./incoming-cad")],
@@ -301,6 +303,9 @@ The main embeddable operations are:
 - `business_status()` methods on preflight, conversion, package audit, and
   package summary results: expose a unified `ready_to_convert`, `converted`,
   `preview_ready`, or `needs_action` state for UI and orchestration.
+- `to_json_string()` on preflight results, batch preflight results, package
+  audits, package summaries, and business statuses: returns stable pretty JSON
+  for API responses, logs, or host applications embedding the library.
 - `detect_format` and `inspect_path`: probe, asset discovery, and optional real
   import validation.
 - `convert_path_to_glb`: single-file conversion with mesh cleanup, GLB

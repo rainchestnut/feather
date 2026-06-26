@@ -131,7 +131,7 @@ impl BatchAssetConversionRequest {
 }
 
 /// Batch preflight result without writing conversion artifacts.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BatchAssetPreflightResult {
     pub decision: AssetPreflightDecision,
     pub action: Option<AssetFailureAction>,
@@ -200,10 +200,15 @@ impl BatchAssetPreflightResult {
             reason: None,
         }
     }
+
+    /// Serializes the batch preflight result to the stable business JSON shape.
+    pub fn to_json_string(&self) -> String {
+        to_pretty_json(self, "batch asset preflight result")
+    }
 }
 
 /// One input result inside a batch preflight.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BatchAssetPreflightItem {
     pub input_path: PathBuf,
     pub result: AssetPreflightResult,
@@ -233,7 +238,7 @@ impl AssetPreflightRequest {
 }
 
 /// Standard business artifact package paths.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssetOutputPackage {
     pub root_dir: PathBuf,
     pub model_path: Option<PathBuf>,
@@ -245,7 +250,7 @@ pub struct AssetOutputPackage {
 }
 
 /// Stable identity for one source or source set under a conversion profile.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssetIdentity {
     pub asset_id: String,
     pub source_sha256: String,
@@ -436,7 +441,7 @@ impl AssetBusinessState {
 }
 
 /// Unified business status derived from preflight, conversion, or package data.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssetBusinessStatus {
     pub state: AssetBusinessState,
     pub previewable: bool,
@@ -461,10 +466,15 @@ impl AssetBusinessStatus {
     pub fn needs_action(&self) -> bool {
         self.state == AssetBusinessState::NeedsAction
     }
+
+    /// Serializes this status to the stable business JSON shape.
+    pub fn to_json_string(&self) -> String {
+        to_pretty_json(self, "asset business status")
+    }
 }
 
 /// Reuse diagnostic for an existing business asset package.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssetPackageFreshness {
     pub current: bool,
     pub reason: AssetPackageFreshnessReason,
@@ -489,7 +499,7 @@ impl AssetPackageFreshness {
 }
 
 /// Read-only audit of a business asset package directory.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssetPackageAudit {
     pub package: AssetOutputPackage,
     pub usable: bool,
@@ -540,6 +550,11 @@ impl AssetPackageAudit {
             })
     }
 
+    /// Serializes this package audit to the stable business JSON shape.
+    pub fn to_json_string(&self) -> String {
+        to_pretty_json(self, "asset package audit")
+    }
+
     fn missing(package: AssetOutputPackage, reason: AssetPackageFreshnessReason) -> Self {
         Self {
             package,
@@ -557,7 +572,7 @@ impl AssetPackageAudit {
 }
 
 /// Read-only summary of converted artifacts inside a business asset package.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AssetPackageSummary {
     pub audit: AssetPackageAudit,
     pub items: Vec<AssetPackageSummaryItem>,
@@ -566,7 +581,7 @@ pub struct AssetPackageSummary {
 }
 
 /// One output or checked input represented in a package summary.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AssetPackageSummaryItem {
     pub index: usize,
     pub operation: AssetPackageSummaryOperation,
@@ -595,6 +610,11 @@ impl AssetPackageSummary {
     /// Returns a coarse business status for the summarized package.
     pub fn business_status(&self) -> AssetBusinessStatus {
         self.audit.business_status()
+    }
+
+    /// Serializes this package summary to the stable business JSON shape.
+    pub fn to_json_string(&self) -> String {
+        to_pretty_json(self, "asset package summary")
     }
 }
 
@@ -646,7 +666,8 @@ pub struct AssetPackageBounds {
 }
 
 /// Stable reason codes explaining why a package can or cannot be reused.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AssetPackageFreshnessReason {
     Current,
     MissingSourceInfo,
@@ -709,7 +730,7 @@ pub struct BatchAssetPackageEnsureResult {
 }
 
 /// Lightweight preflight result for business callers.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssetPreflightResult {
     pub decision: AssetPreflightDecision,
     pub source_format: String,
@@ -761,6 +782,11 @@ impl AssetPreflightResult {
                 reason: None,
             })
         }
+    }
+
+    /// Serializes this preflight result to the stable business JSON shape.
+    pub fn to_json_string(&self) -> String {
+        to_pretty_json(self, "asset preflight result")
     }
 }
 
@@ -2446,6 +2472,13 @@ fn needs_action_status(input: NeedsActionStatusInput) -> AssetBusinessStatus {
         action: input.action,
         reason: input.reason,
     }
+}
+
+fn to_pretty_json(value: &impl Serialize, label: &str) -> String {
+    let mut json = serde_json::to_string_pretty(value)
+        .unwrap_or_else(|error| panic!("{label} JSON serialization should work: {error}"));
+    json.push('\n');
+    json
 }
 
 impl AssetConversionResult {

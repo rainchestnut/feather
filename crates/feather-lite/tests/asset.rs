@@ -56,6 +56,12 @@ fn convert_asset_writes_standard_business_package() {
     assert!(business_status.preview_ready());
     assert!(business_status.previewable);
     assert!(business_status.package_usable);
+    let business_status_json = parse_json(&business_status.to_json_string());
+    assert_eq!(business_status_json["state"], "preview_ready");
+    assert_eq!(business_status_json["previewable"], true);
+    assert_eq!(business_status_json["package_usable"], true);
+    assert_eq!(business_status_json["preview_status"], "ready");
+    assert_eq!(business_status_json["quality_level"], "light");
     assert_eq!(result.quality.quality_level, AssetQualityLevel::Light);
     assert_eq!(result.quality.quality_level.as_str(), "light");
     assert_eq!(result.quality.input_count, 1);
@@ -308,11 +314,25 @@ fn inspect_asset_package_audits_single_package_without_request() {
     let audit_status = audit.business_status();
     assert_eq!(audit_status.state, AssetBusinessState::PreviewReady);
     assert!(audit_status.preview_ready());
+    let audit_json = parse_json(&audit.to_json_string());
+    assert_eq!(audit_json["usable"], true);
+    assert_eq!(audit_json["reason"], "current");
+    assert_eq!(audit_json["kind"], "conversion");
+    assert_eq!(audit_json["status"], "succeeded");
+    assert_eq!(audit_json["identity"]["asset_id"], converted.asset_id);
     let summary = read_asset_package_summary(&output_dir).expect("package summary should read");
     assert!(summary.audit.usable);
     assert_eq!(
         summary.business_status().state,
         AssetBusinessState::PreviewReady
+    );
+    let summary_json = parse_json(&summary.to_json_string());
+    assert_eq!(summary_json["audit"]["usable"], true);
+    assert_eq!(summary_json["audit"]["reason"], "current");
+    assert_eq!(summary_json["items"][0]["operation"], "converted");
+    assert_eq!(
+        summary_json["items"][0]["metadata"]["source_format"],
+        "CATIA_CATPart"
     );
     assert_eq!(summary.items.len(), 1);
     assert_eq!(
@@ -352,6 +372,9 @@ fn inspect_asset_package_audits_single_package_without_request() {
         incomplete.reason,
         AssetPackageFreshnessReason::MissingMetadata
     );
+    let incomplete_json = parse_json(&incomplete.to_json_string());
+    assert_eq!(incomplete_json["usable"], false);
+    assert_eq!(incomplete_json["reason"], "missing_metadata");
     let incomplete_summary =
         read_asset_package_summary(&output_dir).expect("package summary should read");
     assert!(!incomplete_summary.audit.usable);
@@ -599,6 +622,15 @@ fn preflight_asset_returns_business_failure_without_writing_package() {
         business_status.action,
         Some(AssetFailureAction::ProvideReadableVisualization)
     );
+    let preflight_json = parse_json(&result.to_json_string());
+    assert_eq!(preflight_json["decision"], "needs_readable_visualization");
+    assert_eq!(
+        preflight_json["failure"]["category"],
+        "no_readable_lightweight_cache"
+    );
+    let status_json = parse_json(&business_status.to_json_string());
+    assert_eq!(status_json["state"], "needs_action");
+    assert_eq!(status_json["action"], "provide_readable_visualization");
 
     fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
 }
@@ -639,6 +671,28 @@ fn preflight_batch_assets_returns_aggregate_business_decision_without_writing_pa
     assert_eq!(business_status.state, AssetBusinessState::NeedsAction);
     assert_eq!(business_status.ready_count, 1);
     assert_eq!(business_status.blocked_count, 1);
+    let batch_preflight_json = parse_json(&result.to_json_string());
+    assert_eq!(
+        batch_preflight_json["decision"],
+        "needs_readable_visualization"
+    );
+    assert_eq!(
+        batch_preflight_json["action"],
+        "provide_readable_visualization"
+    );
+    assert_eq!(batch_preflight_json["ready_count"], 1);
+    assert_eq!(batch_preflight_json["blocked_count"], 1);
+    assert_eq!(
+        batch_preflight_json["items"]
+            .as_array()
+            .expect("items should be an array")
+            .len(),
+        2
+    );
+    let batch_status_json = parse_json(&business_status.to_json_string());
+    assert_eq!(batch_status_json["state"], "needs_action");
+    assert_eq!(batch_status_json["ready_count"], 1);
+    assert_eq!(batch_status_json["blocked_count"], 1);
     assert!(
         result
             .items
