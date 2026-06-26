@@ -342,6 +342,11 @@ fn metadata_exports_scene_bbox_with_node_transforms() {
     let mut document = sample_lite_document();
     document.nodes[0].transform[3][0] = 10.0;
     document.nodes[0].transform[3][1] = -2.0;
+    let scene_summary = document.scene_summary();
+    assert_eq!(scene_summary.root_names, vec!["Plate"]);
+    assert_eq!(scene_summary.unique_part_count, 1);
+    assert_eq!(scene_summary.part_instance_count, 1);
+    assert_eq!(scene_summary.assembly_node_count, 0);
 
     let metadata = export_metadata_json(&document);
     let parsed_metadata: serde_json::Value =
@@ -358,6 +363,13 @@ fn metadata_exports_scene_bbox_with_node_transforms() {
     assert_eq!(parsed_metadata["mesh_instance_count"], 1);
     assert_eq!(parsed_metadata["scene_depth"], 1);
     assert_eq!(parsed_metadata["source_units"], serde_json::Value::Null);
+    assert_eq!(
+        parsed_metadata["scene_summary"]["root_names"],
+        serde_json::json!(["Plate"])
+    );
+    assert_eq!(parsed_metadata["scene_summary"]["unique_part_count"], 1);
+    assert_eq!(parsed_metadata["scene_summary"]["part_instance_count"], 1);
+    assert_eq!(parsed_metadata["scene_summary"]["assembly_node_count"], 0);
     assert!(metadata.contains("\"bbox\": {\"min\": [10, -2, 0], \"max\": [12, -1, 0]}"));
 }
 
@@ -2129,6 +2141,12 @@ fn imports_ap214_brep_assembly_hierarchy_and_reuses_meshes() {
     assert_eq!(document.nodes.len(), 7);
     assert_eq!(document.mesh_instance_count(), 4);
     assert_eq!(document.scene_depth(), 3);
+    let scene_summary = document.scene_summary();
+    assert_eq!(scene_summary.root_names, vec!["RootAssembly"]);
+    assert_eq!(scene_summary.assembly_node_count, 3);
+    assert_eq!(scene_summary.unique_part_count, 2);
+    assert_eq!(scene_summary.part_instance_count, 4);
+    assert_eq!(scene_summary.instanced_part_count, 2);
 
     let root = document
         .nodes
@@ -2158,6 +2176,14 @@ fn imports_ap214_brep_assembly_hierarchy_and_reuses_meshes() {
         serde_json::from_str(&metadata).expect("assembly metadata should be valid JSON");
     assert_eq!(parsed["mesh_instance_count"], 4);
     assert_eq!(parsed["scene_depth"], 3);
+    assert_eq!(
+        parsed["scene_summary"]["root_names"],
+        serde_json::json!(["RootAssembly"])
+    );
+    assert_eq!(parsed["scene_summary"]["assembly_node_count"], 3);
+    assert_eq!(parsed["scene_summary"]["unique_part_count"], 2);
+    assert_eq!(parsed["scene_summary"]["part_instance_count"], 4);
+    assert_eq!(parsed["scene_summary"]["instanced_part_count"], 2);
     assert_eq!(parsed["source_units"]["length"]["label"], "millimetre");
     let bbox_min = parsed["bbox"]["min"]
         .as_array()

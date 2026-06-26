@@ -1,11 +1,14 @@
 //! Metadata JSON writer for conversion sidecars.
 
-use crate::document::{Aabb, LiteDocument, LiteSourceUnit, Transform, identity_transform};
+use crate::document::{
+    Aabb, LiteDocument, LiteSceneSummary, LiteSourceUnit, Transform, identity_transform,
+};
 use crate::json::escape_json;
 
 /// Serializes document metadata as stable JSON.
 pub fn export_metadata_json(document: &LiteDocument) -> String {
     let metadata = &document.metadata;
+    let scene_summary = document.scene_summary();
     let mut json = String::new();
     json.push_str("{\n");
     push_json_string_field(&mut json, "source_format", &metadata.source_format, true);
@@ -15,15 +18,16 @@ pub fn export_metadata_json(document: &LiteDocument) -> String {
     push_json_number_field(
         &mut json,
         "mesh_instance_count",
-        document.mesh_instance_count() as u64,
+        scene_summary.part_instance_count as u64,
         true,
     );
     push_json_number_field(
         &mut json,
         "scene_depth",
-        document.scene_depth() as u64,
+        scene_summary.scene_depth as u64,
         true,
     );
+    push_json_scene_summary_field(&mut json, "scene_summary", &scene_summary, true);
     push_json_number_field(&mut json, "mesh_count", metadata.mesh_count as u64, true);
     push_json_number_field(
         &mut json,
@@ -71,6 +75,74 @@ pub fn export_metadata_json(document: &LiteDocument) -> String {
     json.push_str("]\n");
     json.push_str("}\n");
     json
+}
+
+fn push_json_scene_summary_field(
+    json: &mut String,
+    key: &str,
+    summary: &LiteSceneSummary,
+    comma: bool,
+) {
+    json.push_str("  \"");
+    json.push_str(key);
+    json.push_str("\": {");
+    push_inline_json_number_field(json, "root_count", summary.root_count as u64, true);
+    json.push_str("\"root_names\": ");
+    push_json_string_array(json, &summary.root_names);
+    json.push_str(", ");
+    push_inline_json_number_field(
+        json,
+        "assembly_node_count",
+        summary.assembly_node_count as u64,
+        true,
+    );
+    push_inline_json_number_field(
+        json,
+        "unique_part_count",
+        summary.unique_part_count as u64,
+        true,
+    );
+    push_inline_json_number_field(
+        json,
+        "part_instance_count",
+        summary.part_instance_count as u64,
+        true,
+    );
+    push_inline_json_number_field(
+        json,
+        "instanced_part_count",
+        summary.instanced_part_count as u64,
+        true,
+    );
+    push_inline_json_number_field(json, "scene_depth", summary.scene_depth as u64, false);
+    json.push('}');
+    if comma {
+        json.push(',');
+    }
+    json.push('\n');
+}
+
+fn push_inline_json_number_field(json: &mut String, key: &str, value: u64, comma: bool) {
+    json.push('"');
+    json.push_str(key);
+    json.push_str("\": ");
+    json.push_str(&value.to_string());
+    if comma {
+        json.push_str(", ");
+    }
+}
+
+fn push_json_string_array(json: &mut String, values: &[String]) {
+    json.push('[');
+    for (index, value) in values.iter().enumerate() {
+        if index > 0 {
+            json.push_str(", ");
+        }
+        json.push('"');
+        json.push_str(&escape_json(value));
+        json.push('"');
+    }
+    json.push(']');
 }
 
 fn push_json_source_units_field(

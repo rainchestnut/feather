@@ -125,6 +125,25 @@ pub struct LiteSourceUnit {
     pub scale_to_si: f32,
 }
 
+/// Business summary of a lightweight scene hierarchy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiteSceneSummary {
+    /// Number of root nodes in the scene graph.
+    pub root_count: usize,
+    /// Display names for root product or grouping nodes.
+    pub root_names: Vec<String>,
+    /// Number of nodes that own children and therefore carry hierarchy.
+    pub assembly_node_count: usize,
+    /// Number of distinct referenced meshes.
+    pub unique_part_count: usize,
+    /// Number of scene nodes that instantiate a mesh.
+    pub part_instance_count: usize,
+    /// Number of distinct meshes referenced by more than one node.
+    pub instanced_part_count: usize,
+    /// Maximum root-to-leaf scene depth.
+    pub scene_depth: usize,
+}
+
 /// A lightweight CAD scene.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LiteDocument {
@@ -182,6 +201,39 @@ impl LiteDocument {
             .map(|node_index| node_depth(&self.nodes, node_index, self.nodes.len()))
             .max()
             .unwrap_or(0)
+    }
+
+    /// Returns a display-oriented summary of roots, product nodes, and part reuse.
+    pub fn scene_summary(&self) -> LiteSceneSummary {
+        let root_names = root_node_indices(&self.nodes)
+            .into_iter()
+            .filter_map(|node_index| self.nodes.get(node_index).map(|node| node.name.clone()))
+            .collect::<Vec<_>>();
+        let mut mesh_use_counts = vec![0_usize; self.meshes.len()];
+        let mut assembly_node_count = 0_usize;
+        let mut part_instance_count = 0_usize;
+        for node in &self.nodes {
+            if !node.children.is_empty() {
+                assembly_node_count += 1;
+            }
+            if let Some(mesh_index) = node.mesh {
+                part_instance_count += 1;
+                if let Some(count) = mesh_use_counts.get_mut(mesh_index) {
+                    *count += 1;
+                }
+            }
+        }
+        let unique_part_count = mesh_use_counts.iter().filter(|count| **count > 0).count();
+        let instanced_part_count = mesh_use_counts.iter().filter(|count| **count > 1).count();
+        LiteSceneSummary {
+            root_count: root_names.len(),
+            root_names,
+            assembly_node_count,
+            unique_part_count,
+            part_instance_count,
+            instanced_part_count,
+            scene_depth: self.scene_depth(),
+        }
     }
 
     /// Ensures that every mesh is reachable by at least one scene node.
