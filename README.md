@@ -220,6 +220,7 @@ let package_audit = inspect_asset_package("./asset-package")?;
 println!("{}", package_audit.usable);
 let package_summary = read_asset_package_summary("./asset-package")?;
 println!("{}", package_summary.items.len());
+println!("{}", package_summary.business_status().state.as_str());
 
 let batch_asset_request = BatchAssetConversionRequest::new(
     vec![PathBuf::from("./incoming-cad")],
@@ -297,6 +298,9 @@ The main embeddable operations are:
 - `read_asset_package_summary`: reads the usable package output list without
   manual JSON parsing, including GLB paths, metadata sidecars, per-item geometry
   counts, sidecar metadata summary, and aggregate output sizes.
+- `business_status()` methods on preflight, conversion, package audit, and
+  package summary results: expose a unified `ready_to_convert`, `converted`,
+  `preview_ready`, or `needs_action` state for UI and orchestration.
 - `detect_format` and `inspect_path`: probe, asset discovery, and optional real
   import validation.
 - `convert_path_to_glb`: single-file conversion with mesh cleanup, GLB
@@ -488,6 +492,9 @@ lightweight result list. Single-file packages return one `converted` item with
 `model.glb` and `metadata.json`; batch packages return one item per manifest
 entry, with `converted`, `reused`, or `checked` operations and typed sidecar
 metadata when a GLB output was written.
+Use `business_status()` when a caller needs one display-oriented state across
+preflight, conversion, and package reads. The stable states are
+`ready_to_convert`, `converted`, `preview_ready`, and `needs_action`.
 Failed package diagnostics keep the original `failure` object and append
 business fields such as `failure_decision=needs_readable_visualization` and
 `failure_action=provide_readable_visualization`, matching

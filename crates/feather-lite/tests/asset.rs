@@ -2,11 +2,11 @@ use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use feather_lite::{
-    ASSET_PACKAGE_CONTRACT_VERSION, AssetConversionError, AssetConversionProfile,
-    AssetConversionRequest, AssetFailure, AssetFailureAction, AssetPackageFreshnessReason,
-    AssetPackageStatus, AssetPackageSummaryOperation, AssetPreflightDecision,
-    AssetPreflightRequest, AssetPreviewStatus, AssetQualityLevel, BatchAssetConversionRequest,
-    BatchItemStatus, JobConversionSettings, asset_conversion_identity,
+    ASSET_PACKAGE_CONTRACT_VERSION, AssetBusinessState, AssetConversionError,
+    AssetConversionProfile, AssetConversionRequest, AssetFailure, AssetFailureAction,
+    AssetPackageFreshnessReason, AssetPackageStatus, AssetPackageSummaryOperation,
+    AssetPreflightDecision, AssetPreflightRequest, AssetPreviewStatus, AssetQualityLevel,
+    BatchAssetConversionRequest, BatchItemStatus, JobConversionSettings, asset_conversion_identity,
     batch_asset_conversion_identity, convert_asset, convert_batch_assets, ensure_asset_package,
     ensure_batch_asset_package, explain_asset_package_freshness,
     explain_batch_asset_package_freshness, inspect_asset_package, is_asset_package_current,
@@ -51,6 +51,11 @@ fn convert_asset_writes_standard_business_package() {
     assert!(result.quality.has_visual_geometry);
     assert_eq!(result.quality.preview_status, AssetPreviewStatus::Ready);
     assert_eq!(result.quality.preview_status.as_str(), "ready");
+    let business_status = result.business_status();
+    assert_eq!(business_status.state, AssetBusinessState::PreviewReady);
+    assert!(business_status.preview_ready());
+    assert!(business_status.previewable);
+    assert!(business_status.package_usable);
     assert_eq!(result.quality.quality_level, AssetQualityLevel::Light);
     assert_eq!(result.quality.quality_level.as_str(), "light");
     assert_eq!(result.quality.input_count, 1);
@@ -300,8 +305,15 @@ fn inspect_asset_package_audits_single_package_without_request() {
         audit.quality.as_ref().expect("quality should exist"),
         &converted.quality
     );
+    let audit_status = audit.business_status();
+    assert_eq!(audit_status.state, AssetBusinessState::PreviewReady);
+    assert!(audit_status.preview_ready());
     let summary = read_asset_package_summary(&output_dir).expect("package summary should read");
     assert!(summary.audit.usable);
+    assert_eq!(
+        summary.business_status().state,
+        AssetBusinessState::PreviewReady
+    );
     assert_eq!(summary.items.len(), 1);
     assert_eq!(
         summary.output_size_bytes,
@@ -580,6 +592,13 @@ fn preflight_asset_returns_business_failure_without_writing_package() {
         result.action(),
         Some(AssetFailureAction::ProvideReadableVisualization)
     );
+    let business_status = result.business_status();
+    assert_eq!(business_status.state, AssetBusinessState::NeedsAction);
+    assert!(business_status.needs_action());
+    assert_eq!(
+        business_status.action,
+        Some(AssetFailureAction::ProvideReadableVisualization)
+    );
 
     fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
 }
@@ -616,6 +635,10 @@ fn preflight_batch_assets_returns_aggregate_business_decision_without_writing_pa
         result.action,
         Some(AssetFailureAction::ProvideReadableVisualization)
     );
+    let business_status = result.business_status();
+    assert_eq!(business_status.state, AssetBusinessState::NeedsAction);
+    assert_eq!(business_status.ready_count, 1);
+    assert_eq!(business_status.blocked_count, 1);
     assert!(
         result
             .items
@@ -715,6 +738,10 @@ fn preflight_asset_returns_business_ready_decision_and_quality() {
     assert_eq!(result.decision.as_str(), "ready");
     assert!(result.ready());
     assert_eq!(result.action(), None);
+    let business_status = result.business_status();
+    assert_eq!(business_status.state, AssetBusinessState::ReadyToConvert);
+    assert!(!business_status.previewable);
+    assert_eq!(business_status.ready_count, 1);
     assert!(result.required_condition.is_none());
     assert!(result.failure.is_none());
     assert_eq!(result.node_count, Some(1));
@@ -1066,6 +1093,10 @@ fn inspect_asset_package_audits_batch_package_without_request() {
     assert!(!check_audit.previewable());
     assert_eq!(check_audit.reason, AssetPackageFreshnessReason::Current);
     assert_eq!(
+        check_audit.business_status().state,
+        AssetBusinessState::ReadyToConvert
+    );
+    assert_eq!(
         check_audit.quality.as_ref().expect("quality should exist"),
         &checked.quality
     );
@@ -1075,6 +1106,10 @@ fn inspect_asset_package_audits_batch_package_without_request() {
     assert_eq!(
         check_summary.items[0].operation,
         AssetPackageSummaryOperation::Checked
+    );
+    assert_eq!(
+        check_summary.business_status().state,
+        AssetBusinessState::ReadyToConvert
     );
     assert!(!check_summary.items[0].previewable());
     assert!(check_summary.items[0].output_path.is_none());
@@ -1376,6 +1411,12 @@ fn convert_asset_failure_writes_diagnostics_and_returns_package() {
     let audit = inspect_asset_package(&output_dir).expect("package audit should run");
     assert!(!audit.usable);
     assert_eq!(audit.reason, AssetPackageFreshnessReason::DiagnosticsFailed);
+    let audit_status = audit.business_status();
+    assert_eq!(audit_status.state, AssetBusinessState::NeedsAction);
+    assert_eq!(
+        audit_status.reason,
+        Some(AssetPackageFreshnessReason::DiagnosticsFailed)
+    );
     assert_eq!(audit.status.as_deref(), Some("failed"));
     assert_eq!(
         audit

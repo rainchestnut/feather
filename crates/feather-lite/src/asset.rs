@@ -179,6 +179,27 @@ impl BatchAssetPreflightResult {
         ready_request.input_paths = input_paths;
         Some(ready_request)
     }
+
+    /// Returns a coarse business status for the whole preflight result.
+    pub fn business_status(&self) -> AssetBusinessStatus {
+        AssetBusinessStatus {
+            state: if self.ready() {
+                AssetBusinessState::ReadyToConvert
+            } else {
+                AssetBusinessState::NeedsAction
+            },
+            previewable: false,
+            package_usable: false,
+            input_count: self.input_count,
+            ready_count: self.ready_count,
+            blocked_count: self.blocked_count,
+            preview_status: None,
+            quality_level: None,
+            decision: Some(self.decision),
+            action: self.action,
+            reason: None,
+        }
+    }
 }
 
 /// One input result inside a batch preflight.
@@ -392,6 +413,56 @@ impl AssetPackageStatus {
     }
 }
 
+/// Coarse business state suitable for UI, logs, and orchestration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssetBusinessState {
+    ReadyToConvert,
+    Converted,
+    PreviewReady,
+    NeedsAction,
+}
+
+impl AssetBusinessState {
+    /// Returns the stable lowercase state label for API responses and logs.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ReadyToConvert => "ready_to_convert",
+            Self::Converted => "converted",
+            Self::PreviewReady => "preview_ready",
+            Self::NeedsAction => "needs_action",
+        }
+    }
+}
+
+/// Unified business status derived from preflight, conversion, or package data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssetBusinessStatus {
+    pub state: AssetBusinessState,
+    pub previewable: bool,
+    pub package_usable: bool,
+    pub input_count: usize,
+    pub ready_count: usize,
+    pub blocked_count: usize,
+    pub preview_status: Option<AssetPreviewStatus>,
+    pub quality_level: Option<AssetQualityLevel>,
+    pub decision: Option<AssetPreflightDecision>,
+    pub action: Option<AssetFailureAction>,
+    pub reason: Option<AssetPackageFreshnessReason>,
+}
+
+impl AssetBusinessStatus {
+    /// Returns true when the status is `preview_ready`.
+    pub fn preview_ready(&self) -> bool {
+        self.state == AssetBusinessState::PreviewReady
+    }
+
+    /// Returns true when caller action is required before preview delivery.
+    pub fn needs_action(&self) -> bool {
+        self.state == AssetBusinessState::NeedsAction
+    }
+}
+
 /// Reuse diagnostic for an existing business asset package.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssetPackageFreshness {
@@ -438,6 +509,35 @@ impl AssetPackageAudit {
         self.quality
             .as_ref()
             .is_some_and(|quality| quality.previewable)
+    }
+
+    /// Returns a coarse business status for this package audit.
+    pub fn business_status(&self) -> AssetBusinessStatus {
+        if !self.usable {
+            return needs_action_status(NeedsActionStatusInput {
+                input_count: self.input_count,
+                action: self.failure.as_ref().map(AssetFailure::action),
+                decision: self.failure.as_ref().map(AssetFailure::decision),
+                reason: Some(self.reason),
+            });
+        }
+
+        self.quality
+            .as_ref()
+            .map(|quality| business_status_from_quality(quality, true, None))
+            .unwrap_or_else(|| AssetBusinessStatus {
+                state: AssetBusinessState::Converted,
+                previewable: false,
+                package_usable: true,
+                input_count: self.input_count,
+                ready_count: self.input_count,
+                blocked_count: 0,
+                preview_status: None,
+                quality_level: None,
+                decision: None,
+                action: None,
+                reason: None,
+            })
     }
 
     fn missing(package: AssetOutputPackage, reason: AssetPackageFreshnessReason) -> Self {
@@ -488,6 +588,13 @@ impl AssetPackageSummaryItem {
     /// Returns true when this item has a GLB preview artifact.
     pub fn previewable(&self) -> bool {
         self.output_path.is_some()
+    }
+}
+
+impl AssetPackageSummary {
+    /// Returns a coarse business status for the summarized package.
+    pub fn business_status(&self) -> AssetBusinessStatus {
+        self.audit.business_status()
     }
 }
 
@@ -628,6 +735,32 @@ impl AssetPreflightResult {
     /// Returns the recommended action when this preflight is blocked.
     pub fn action(&self) -> Option<AssetFailureAction> {
         self.failure.as_ref().map(AssetFailure::action)
+    }
+
+    /// Returns a coarse business status for this preflight result.
+    pub fn business_status(&self) -> AssetBusinessStatus {
+        if self.ready() {
+            AssetBusinessStatus {
+                state: AssetBusinessState::ReadyToConvert,
+                previewable: false,
+                package_usable: false,
+                input_count: 1,
+                ready_count: 1,
+                blocked_count: 0,
+                preview_status: self.quality.as_ref().map(|quality| quality.preview_status),
+                quality_level: self.quality.as_ref().map(|quality| quality.quality_level),
+                decision: Some(self.decision),
+                action: None,
+                reason: None,
+            }
+        } else {
+            needs_action_status(NeedsActionStatusInput {
+                input_count: 1,
+                action: self.action(),
+                decision: Some(self.decision),
+                reason: None,
+            })
+        }
     }
 }
 
@@ -2250,7 +2383,77 @@ fn quality_level_for_triangles(triangle_count: u64) -> AssetQualityLevel {
     }
 }
 
+struct NeedsActionStatusInput {
+    input_count: usize,
+    action: Option<AssetFailureAction>,
+    decision: Option<AssetPreflightDecision>,
+    reason: Option<AssetPackageFreshnessReason>,
+}
+
+fn business_status_from_quality(
+    quality: &AssetQualityReport,
+    package_usable: bool,
+    reason: Option<AssetPackageFreshnessReason>,
+) -> AssetBusinessStatus {
+    let state = match quality.preview_status {
+        AssetPreviewStatus::Ready => AssetBusinessState::PreviewReady,
+        AssetPreviewStatus::NoPreviewOutput
+            if quality.checked_count == quality.input_count
+                && quality.output_size_bytes == 0
+                && quality.failed_count == 0 =>
+        {
+            AssetBusinessState::ReadyToConvert
+        }
+        AssetPreviewStatus::NoPreviewOutput => AssetBusinessState::Converted,
+        AssetPreviewStatus::NoVisualGeometry | AssetPreviewStatus::PartialFailure => {
+            AssetBusinessState::NeedsAction
+        }
+    };
+    let blocked_count = if state == AssetBusinessState::NeedsAction {
+        quality
+            .failed_count
+            .max(usize::from(!quality.has_visual_geometry))
+    } else {
+        0
+    };
+
+    AssetBusinessStatus {
+        state,
+        previewable: quality.previewable,
+        package_usable,
+        input_count: quality.input_count,
+        ready_count: quality.successful_count.saturating_sub(blocked_count),
+        blocked_count,
+        preview_status: Some(quality.preview_status),
+        quality_level: Some(quality.quality_level),
+        decision: None,
+        action: None,
+        reason,
+    }
+}
+
+fn needs_action_status(input: NeedsActionStatusInput) -> AssetBusinessStatus {
+    AssetBusinessStatus {
+        state: AssetBusinessState::NeedsAction,
+        previewable: false,
+        package_usable: false,
+        input_count: input.input_count,
+        ready_count: 0,
+        blocked_count: input.input_count,
+        preview_status: None,
+        quality_level: None,
+        decision: input.decision,
+        action: input.action,
+        reason: input.reason,
+    }
+}
+
 impl AssetConversionResult {
+    /// Returns a coarse business status for this successful conversion.
+    pub fn business_status(&self) -> AssetBusinessStatus {
+        business_status_from_quality(&self.quality, true, None)
+    }
+
     fn from_summary(
         package: AssetOutputPackage,
         identity: AssetIdentity,
@@ -2280,6 +2483,13 @@ impl AssetConversionResult {
             vertex_count: summary.vertex_count,
             triangle_count: summary.triangle_count,
         }
+    }
+}
+
+impl BatchAssetConversionResult {
+    /// Returns a coarse business status for this successful batch conversion.
+    pub fn business_status(&self) -> AssetBusinessStatus {
+        business_status_from_quality(&self.quality, true, None)
     }
 }
 

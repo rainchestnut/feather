@@ -49,11 +49,11 @@ mod probe;
 mod json;
 
 pub use asset::{
-    AssetConversionError, AssetConversionProfile, AssetConversionRequest, AssetConversionResult,
-    AssetFailure, AssetFailureAction, AssetIdentity, AssetOutputPackage, AssetPackageAudit,
-    AssetPackageBounds, AssetPackageEnsureResult, AssetPackageFreshness,
-    AssetPackageFreshnessReason, AssetPackageMetadataSummary, AssetPackageStatus,
-    AssetPackageSummary, AssetPackageSummaryItem, AssetPackageSummaryOperation,
+    AssetBusinessState, AssetBusinessStatus, AssetConversionError, AssetConversionProfile,
+    AssetConversionRequest, AssetConversionResult, AssetFailure, AssetFailureAction, AssetIdentity,
+    AssetOutputPackage, AssetPackageAudit, AssetPackageBounds, AssetPackageEnsureResult,
+    AssetPackageFreshness, AssetPackageFreshnessReason, AssetPackageMetadataSummary,
+    AssetPackageStatus, AssetPackageSummary, AssetPackageSummaryItem, AssetPackageSummaryOperation,
     AssetPreflightDecision, AssetPreflightRequest, AssetPreflightResult, AssetPreviewStatus,
     AssetQualityLevel, AssetQualityReport, BatchAssetConversionRequest, BatchAssetConversionResult,
     BatchAssetPackageEnsureResult, BatchAssetPreflightItem, BatchAssetPreflightResult,
