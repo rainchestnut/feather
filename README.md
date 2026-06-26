@@ -227,9 +227,12 @@ let batch_asset_request = BatchAssetConversionRequest::new(
 );
 let batch_preflight = preflight_batch_assets(&batch_asset_request)?;
 println!("{}", batch_preflight.decision.as_str());
+let ready_batch_asset_request = batch_preflight
+    .request_for_ready_inputs(&batch_asset_request)
+    .unwrap_or_else(|| batch_asset_request.clone());
 let planned_batch_asset = batch_asset_conversion_identity(&batch_asset_request)?;
 println!("{}", planned_batch_asset.settings_fingerprint);
-let batch_asset = ensure_batch_asset_package(&batch_asset_request)?;
+let batch_asset = ensure_batch_asset_package(&ready_batch_asset_request)?;
 println!("{}", batch_asset.status.as_str());
 println!("{}", is_batch_asset_package_current(&batch_asset_request)?);
 if let Some(current_batch_asset) = load_current_batch_asset_package(&batch_asset_request)? {
@@ -465,6 +468,10 @@ geometry counts while still reporting `no_preview_output` because they do not
 write GLB preview artifacts.
 Use `preflight_batch_assets` to get one `AssetPreflightDecision` per discovered
 input plus an aggregate decision/action before creating or rewriting a package.
+Call `ready()` to require all inputs to pass, `blocked_input_paths()` to report
+blocked files, or `request_for_ready_inputs()` to build a conversion request
+that skips blocked files while keeping the original profile, output directory,
+mode, reference mappings, and import limits.
 For UI, logs, or orchestration code that needs more than a boolean,
 `explain_asset_package_freshness` and
 `explain_batch_asset_package_freshness` return `AssetPackageFreshness` with a

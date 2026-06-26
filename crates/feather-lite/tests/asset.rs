@@ -626,6 +626,23 @@ fn preflight_batch_assets_returns_aggregate_business_decision_without_writing_pa
         item.input_path == blocked_path
             && item.result.decision == AssetPreflightDecision::NeedsReadableVisualization
     }));
+    assert_eq!(result.ready_input_paths(), vec![ready_path.clone()]);
+    assert_eq!(result.blocked_input_paths(), vec![blocked_path.clone()]);
+
+    let ready_request = result
+        .request_for_ready_inputs(&request)
+        .expect("ready request should be available");
+    assert_eq!(ready_request.input_paths, vec![ready_path.clone()]);
+    let converted = convert_batch_assets(&ready_request).expect("ready input should convert");
+    assert_eq!(converted.report.input_count(), 1);
+    assert_eq!(converted.report.converted_count(), 1);
+    assert!(
+        converted
+            .report
+            .items
+            .iter()
+            .all(|item| item.input_path != blocked_path.display().to_string())
+    );
 
     fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
 }

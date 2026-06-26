@@ -146,6 +146,39 @@ impl BatchAssetPreflightResult {
     pub fn ready(&self) -> bool {
         self.decision == AssetPreflightDecision::Ready
     }
+
+    /// Returns the inputs that can be converted under the current request settings.
+    pub fn ready_input_paths(&self) -> Vec<PathBuf> {
+        self.items
+            .iter()
+            .filter(|item| item.result.ready())
+            .map(|item| item.input_path.clone())
+            .collect()
+    }
+
+    /// Returns the inputs that are blocked before conversion.
+    pub fn blocked_input_paths(&self) -> Vec<PathBuf> {
+        self.items
+            .iter()
+            .filter(|item| !item.result.ready())
+            .map(|item| item.input_path.clone())
+            .collect()
+    }
+
+    /// Builds a conversion request that contains only preflight-ready inputs.
+    pub fn request_for_ready_inputs(
+        &self,
+        request: &BatchAssetConversionRequest,
+    ) -> Option<BatchAssetConversionRequest> {
+        let input_paths = self.ready_input_paths();
+        if input_paths.is_empty() {
+            return None;
+        }
+
+        let mut ready_request = request.clone();
+        ready_request.input_paths = input_paths;
+        Some(ready_request)
+    }
 }
 
 /// One input result inside a batch preflight.
