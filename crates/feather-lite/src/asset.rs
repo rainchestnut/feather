@@ -878,6 +878,26 @@ pub fn ensure_batch_asset_package(
     })
 }
 
+/// Loads a current single-file asset package without running conversion.
+///
+/// Returns `None` when the package is missing, incomplete, failed, or stale for
+/// the request's source and conversion settings.
+pub fn load_current_asset_package(
+    request: &AssetConversionRequest,
+) -> Result<Option<AssetConversionResult>, AssetConversionError> {
+    current_asset_result(request)
+}
+
+/// Loads a current batch asset package without running conversion.
+///
+/// Returns `None` when the package is missing, incomplete, failed, or stale for
+/// the request's source set, conversion settings, or batch mode.
+pub fn load_current_batch_asset_package(
+    request: &BatchAssetConversionRequest,
+) -> Result<Option<BatchAssetConversionResult>, AssetConversionError> {
+    current_batch_asset_result(request)
+}
+
 /// Returns true when an existing single-file asset package matches this request.
 pub fn is_asset_package_current(
     request: &AssetConversionRequest,

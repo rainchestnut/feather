@@ -161,7 +161,8 @@ use feather_lite::{
     batch_asset_conversion_identity, convert_path_to_glb, ensure_asset_package,
     ensure_batch_asset_package, explain_asset_package_freshness,
     explain_batch_asset_package_freshness, inspect_path, is_asset_package_current,
-    is_batch_asset_package_current, run_batch_conversion,
+    is_batch_asset_package_current, load_current_asset_package,
+    load_current_batch_asset_package, run_batch_conversion,
 };
 
 let inspect = inspect_path(
@@ -208,6 +209,9 @@ println!(
         .display()
 );
 println!("{}", is_asset_package_current(&asset_request)?);
+if let Some(current_asset) = load_current_asset_package(&asset_request)? {
+    println!("{}", current_asset.asset_id);
+}
 println!("{}", asset.asset.quality.preview_status.as_str());
 let freshness = explain_asset_package_freshness(&asset_request)?;
 println!("{}", freshness.reason.as_str());
@@ -221,6 +225,9 @@ println!("{}", planned_batch_asset.settings_fingerprint);
 let batch_asset = ensure_batch_asset_package(&batch_asset_request)?;
 println!("{}", batch_asset.status.as_str());
 println!("{}", is_batch_asset_package_current(&batch_asset_request)?);
+if let Some(current_batch_asset) = load_current_batch_asset_package(&batch_asset_request)? {
+    println!("{}", current_batch_asset.asset_id);
+}
 println!("{}", batch_asset.asset.quality.quality_level.as_str());
 let batch_freshness = explain_batch_asset_package_freshness(&batch_asset_request)?;
 println!("{}", batch_freshness.reason.as_str());
@@ -268,6 +275,9 @@ The main embeddable operations are:
   packages still match the current source hash, source size, conversion profile,
   and batch mode; the explain APIs return stable reason codes for stale
   packages.
+- `load_current_asset_package` and `load_current_batch_asset_package`: read and
+  validate an existing package without triggering conversion, returning `None`
+  when the package is missing, failed, incomplete, or stale.
 - `detect_format` and `inspect_path`: probe, asset discovery, and optional real
   import validation.
 - `convert_path_to_glb`: single-file conversion with mesh cleanup, GLB

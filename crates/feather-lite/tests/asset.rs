@@ -9,7 +9,8 @@ use feather_lite::{
     asset_conversion_identity, batch_asset_conversion_identity, convert_asset,
     convert_batch_assets, ensure_asset_package, ensure_batch_asset_package,
     explain_asset_package_freshness, explain_batch_asset_package_freshness,
-    is_asset_package_current, is_batch_asset_package_current, preflight_asset,
+    is_asset_package_current, is_batch_asset_package_current, load_current_asset_package,
+    load_current_batch_asset_package, preflight_asset,
 };
 
 const SAMPLE_CACHE: &str = "\
@@ -209,6 +210,48 @@ fn ensure_asset_package_reuses_current_package() {
     assert_eq!(
         second.asset.settings_fingerprint,
         first.asset.settings_fingerprint
+    );
+
+    fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
+}
+
+#[test]
+fn load_current_asset_package_reads_only_current_package() {
+    let temp_dir = unique_temp_dir("asset-load-current");
+    fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+    let input_path = temp_dir.join("fixture.CATPart");
+    let output_dir = temp_dir.join("asset");
+    fs::write(
+        &input_path,
+        format!("CATPart private payload prefix\n{SAMPLE_CACHE}\nprivate suffix"),
+    )
+    .expect("fixture should be written");
+
+    let request = AssetConversionRequest::new(&input_path, &output_dir);
+    assert!(
+        load_current_asset_package(&request)
+            .expect("current package load should run")
+            .is_none()
+    );
+    assert!(!output_dir.exists());
+
+    let converted = convert_asset(&request).expect("asset conversion should succeed");
+    let current = load_current_asset_package(&request)
+        .expect("current package load should run")
+        .expect("current package should be returned");
+    assert_eq!(current.asset_id, converted.asset_id);
+    assert_eq!(current.quality, converted.quality);
+    assert_eq!(current.triangle_count, converted.triangle_count);
+
+    fs::write(
+        &input_path,
+        format!("CATPart private payload changed\n{SAMPLE_CACHE}\nprivate suffix"),
+    )
+    .expect("fixture should be changed");
+    assert!(
+        load_current_asset_package(&request)
+            .expect("stale package load should run")
+            .is_none()
     );
 
     fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
@@ -739,6 +782,45 @@ fn ensure_batch_asset_package_reuses_current_package() {
     assert_eq!(second.status, AssetPackageStatus::Reused);
     assert_eq!(second.asset.asset_id, first.asset.asset_id);
     assert_eq!(second.asset.report.converted_count(), 1);
+
+    fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
+}
+
+#[test]
+fn load_current_batch_asset_package_reads_only_current_package() {
+    let temp_dir = unique_temp_dir("asset-batch-load-current");
+    fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+    let input_path = temp_dir.join("fixture.CATPart");
+    let output_dir = temp_dir.join("batch-asset");
+    fs::write(
+        &input_path,
+        format!("CATPart private payload prefix\n{SAMPLE_CACHE}\nprivate suffix"),
+    )
+    .expect("fixture should be written");
+
+    let request = BatchAssetConversionRequest::new(vec![input_path], &output_dir);
+    assert!(
+        load_current_batch_asset_package(&request)
+            .expect("current batch load should run")
+            .is_none()
+    );
+    assert!(!output_dir.exists());
+
+    let converted = convert_batch_assets(&request).expect("batch conversion should succeed");
+    let current = load_current_batch_asset_package(&request)
+        .expect("current batch load should run")
+        .expect("current batch package should be returned");
+    assert_eq!(current.asset_id, converted.asset_id);
+    assert_eq!(current.quality, converted.quality);
+    assert_eq!(current.report.input_count(), converted.report.input_count());
+
+    let mut check_request = request.clone();
+    check_request.check_only = true;
+    assert!(
+        load_current_batch_asset_package(&check_request)
+            .expect("stale batch load should run")
+            .is_none()
+    );
 
     fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
 }
