@@ -50,7 +50,7 @@ mod json;
 
 pub use asset::{
     AssetConversionError, AssetConversionProfile, AssetConversionRequest, AssetConversionResult,
-    AssetFailure, AssetIdentity, AssetOutputPackage, AssetPackageEnsureResult,
+    AssetFailure, AssetFailureAction, AssetIdentity, AssetOutputPackage, AssetPackageEnsureResult,
     AssetPackageFreshness, AssetPackageFreshnessReason, AssetPackageStatus, AssetPreflightDecision,
     AssetPreflightRequest, AssetPreflightResult, AssetPreviewStatus, AssetQualityLevel,
     AssetQualityReport, BatchAssetConversionRequest, BatchAssetConversionResult,

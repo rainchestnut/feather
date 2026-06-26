@@ -255,7 +255,9 @@ The main embeddable operations are:
   with preview readiness, geometry size class, aggregate counts, and artifact
   sizes. `preflight_asset` performs a real import check without writing
   artifacts and returns a stable `AssetPreflightDecision`, optional
-  `required_condition`, geometry counts, and preflight quality.
+  `required_condition`, geometry counts, and preflight quality. Failed business
+  conversions return `AssetFailure`, whose `decision()` and `action()` methods
+  expose stable routing labels for recovery workflows.
 - `asset_conversion_identity` and `batch_asset_conversion_identity`: compute the
   same stable `asset_id`, source hash, source byte size, and settings
   fingerprint that conversion and reuse checks will use, without running mesh
@@ -304,6 +306,11 @@ input path, input size, duration, status, detected format data when available,
 output paths and sizes for successful conversions, and stage/category/message
 for failures. A failed item does not stop later items from running, but the CLI
 returns a non-zero exit code after writing the manifest when any item fails.
+Business asset diagnostics additionally include `failure_decision`,
+`failure_action`, and `failure_required_condition` so callers do not need to
+parse human-readable messages before deciding whether to request readable
+visualization, resolve references, run upstream tessellation, raise limits, or
+reject invalid input.
 The versioned JSON contracts for capabilities, inspect reports, batch
 manifests, local job records, and cache-dump manifests are documented in
 [`docs/json_contracts.md`](docs/json_contracts.md).
@@ -436,6 +443,10 @@ For UI, logs, or orchestration code that needs more than a boolean,
 stable reason label such as `source_changed`, `settings_changed`,
 `missing_metadata`, `missing_manifest`, `manifest_mismatch`,
 `output_artifact_missing`, or `diagnostics_failed`.
+Failed package diagnostics keep the original `failure` object and append
+business fields such as `failure_decision=needs_readable_visualization` and
+`failure_action=provide_readable_visualization`, matching
+`AssetFailure::decision()` and `AssetFailure::action()`.
 When an existing batch package is stale, `ensure_batch_asset_package` reuses
 unchanged successful items and converts only changed or new inputs; deleted
 inputs are removed from the rewritten manifest.

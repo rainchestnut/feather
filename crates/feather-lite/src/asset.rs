@@ -183,6 +183,42 @@ pub struct AssetFailure {
     pub retryable: bool,
 }
 
+/// Stable business action recommended for a conversion failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssetFailureAction {
+    ProvideReadableVisualization,
+    ResolveExternalReferences,
+    RunUpstreamTessellation,
+    IncreaseResourceLimits,
+    UseSupportedInput,
+    RepairSourceData,
+    CompleteSourcePackage,
+    CheckStorageAccess,
+    FixExportPipeline,
+    ReviewBatchFailures,
+    InspectFailure,
+}
+
+impl AssetFailureAction {
+    /// Returns the stable lowercase action label for API responses and logs.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ProvideReadableVisualization => "provide_readable_visualization",
+            Self::ResolveExternalReferences => "resolve_external_references",
+            Self::RunUpstreamTessellation => "run_upstream_tessellation",
+            Self::IncreaseResourceLimits => "increase_resource_limits",
+            Self::UseSupportedInput => "use_supported_input",
+            Self::RepairSourceData => "repair_source_data",
+            Self::CompleteSourcePackage => "complete_source_package",
+            Self::CheckStorageAccess => "check_storage_access",
+            Self::FixExportPipeline => "fix_export_pipeline",
+            Self::ReviewBatchFailures => "review_batch_failures",
+            Self::InspectFailure => "inspect_failure",
+        }
+    }
+}
+
 /// Successful single-source conversion result.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssetConversionResult {
@@ -405,7 +441,8 @@ pub struct AssetPreflightResult {
 }
 
 /// Business decision returned by `preflight_asset`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AssetPreflightDecision {
     Ready,
     NeedsReadableVisualization,
@@ -1367,6 +1404,21 @@ impl AssetConversionResult {
 }
 
 impl AssetFailure {
+    /// Returns the business decision represented by this failure category.
+    pub fn decision(&self) -> AssetPreflightDecision {
+        failure_decision_for_category(&self.category)
+    }
+
+    /// Returns the recommended next action for operators or upstream systems.
+    pub fn action(&self) -> AssetFailureAction {
+        failure_action_for_category(&self.category)
+    }
+
+    /// Returns the missing condition that would make this failure actionable.
+    pub fn required_condition(&self) -> Option<&'static str> {
+        failure_required_condition(&self.category)
+    }
+
     fn from_conversion_error(error: &ConversionError) -> Self {
         let stage = crate::batch::conversion_error_stage(error);
         let message = error.to_string();
@@ -1395,6 +1447,61 @@ impl AssetFailure {
             message,
             retryable: retryable_failure(category),
         }
+    }
+}
+
+fn failure_decision_for_category(category: &str) -> AssetPreflightDecision {
+    match category {
+        "no_readable_lightweight_cache" | "native_visualization_not_decoded" => {
+            AssetPreflightDecision::NeedsReadableVisualization
+        }
+        "missing_external_reference" => AssetPreflightDecision::NeedsExternalReferences,
+        "tessellation_pending" => AssetPreflightDecision::NeedsUpstreamTessellation,
+        "resource_limit_exceeded" => AssetPreflightDecision::ResourceLimitExceeded,
+        "unsupported_input" => AssetPreflightDecision::UnsupportedInput,
+        "invalid_source_data" => AssetPreflightDecision::InvalidSourceData,
+        "missing_data" => AssetPreflightDecision::MissingData,
+        "io" => AssetPreflightDecision::IoBlocked,
+        "export" => AssetPreflightDecision::ExportBlocked,
+        _ => AssetPreflightDecision::Failed,
+    }
+}
+
+fn failure_action_for_category(category: &str) -> AssetFailureAction {
+    match category {
+        "no_readable_lightweight_cache" | "native_visualization_not_decoded" => {
+            AssetFailureAction::ProvideReadableVisualization
+        }
+        "missing_external_reference" => AssetFailureAction::ResolveExternalReferences,
+        "tessellation_pending" => AssetFailureAction::RunUpstreamTessellation,
+        "resource_limit_exceeded" => AssetFailureAction::IncreaseResourceLimits,
+        "unsupported_input" => AssetFailureAction::UseSupportedInput,
+        "invalid_source_data" => AssetFailureAction::RepairSourceData,
+        "missing_data" => AssetFailureAction::CompleteSourcePackage,
+        "io" => AssetFailureAction::CheckStorageAccess,
+        "export" => AssetFailureAction::FixExportPipeline,
+        "batch_item_failed" => AssetFailureAction::ReviewBatchFailures,
+        _ => AssetFailureAction::InspectFailure,
+    }
+}
+
+fn failure_required_condition(category: &str) -> Option<&'static str> {
+    match category {
+        "no_readable_lightweight_cache" | "native_visualization_not_decoded" => {
+            Some("readable lightweight visualization payload")
+        }
+        "missing_external_reference" => {
+            Some("all external references resolved through resolve_dirs or reference mappings")
+        }
+        "tessellation_pending" => Some("upstream tessellation or supported analytic geometry"),
+        "resource_limit_exceeded" => Some("larger import limits or a smaller source package"),
+        "unsupported_input" => Some("a supported CAD, mesh, lightweight, or STEP input"),
+        "invalid_source_data" => Some("valid source data"),
+        "missing_data" => Some("complete source package data"),
+        "io" => Some("readable input and writable output filesystem paths"),
+        "export" => Some("valid exportable geometry"),
+        "batch_item_failed" => Some("all failed batch items corrected or removed"),
+        _ => None,
     }
 }
 
@@ -1432,20 +1539,7 @@ fn preflight_decision(importable: bool, failure_category: Option<&str>) -> Asset
     if importable {
         return AssetPreflightDecision::Ready;
     }
-    match failure_category.unwrap_or("other") {
-        "no_readable_lightweight_cache" | "native_visualization_not_decoded" => {
-            AssetPreflightDecision::NeedsReadableVisualization
-        }
-        "missing_external_reference" => AssetPreflightDecision::NeedsExternalReferences,
-        "tessellation_pending" => AssetPreflightDecision::NeedsUpstreamTessellation,
-        "resource_limit_exceeded" => AssetPreflightDecision::ResourceLimitExceeded,
-        "unsupported_input" => AssetPreflightDecision::UnsupportedInput,
-        "invalid_source_data" => AssetPreflightDecision::InvalidSourceData,
-        "missing_data" => AssetPreflightDecision::MissingData,
-        "io" => AssetPreflightDecision::IoBlocked,
-        "export" => AssetPreflightDecision::ExportBlocked,
-        _ => AssetPreflightDecision::Failed,
-    }
+    failure_decision_for_category(failure_category.unwrap_or("other"))
 }
 
 fn preflight_quality_report(
@@ -2034,6 +2128,12 @@ struct AssetDiagnosticsJson {
     triangle_count: Option<u64>,
     quality: Option<AssetQualityReport>,
     failure: Option<AssetFailure>,
+    #[serde(default)]
+    failure_decision: Option<AssetPreflightDecision>,
+    #[serde(default)]
+    failure_action: Option<AssetFailureAction>,
+    #[serde(default)]
+    failure_required_condition: Option<String>,
     updated_at_unix_ms: u64,
 }
 
@@ -2061,6 +2161,11 @@ fn write_diagnostics(
         triangle_count: result.map(|result| result.triangle_count),
         quality: result.map(|result| result.quality.clone()),
         failure: failure.cloned(),
+        failure_decision: failure.map(AssetFailure::decision),
+        failure_action: failure.map(AssetFailure::action),
+        failure_required_condition: failure
+            .and_then(AssetFailure::required_condition)
+            .map(str::to_string),
         updated_at_unix_ms: unix_timestamp_millis(),
     };
     write_json(&package.diagnostics_path, &diagnostics)
@@ -2087,6 +2192,12 @@ struct BatchAssetDiagnosticsJson {
     failed_count: usize,
     quality: Option<AssetQualityReport>,
     failure: Option<AssetFailure>,
+    #[serde(default)]
+    failure_decision: Option<AssetPreflightDecision>,
+    #[serde(default)]
+    failure_action: Option<AssetFailureAction>,
+    #[serde(default)]
+    failure_required_condition: Option<String>,
     updated_at_unix_ms: u64,
 }
 
@@ -2113,6 +2224,11 @@ fn write_batch_diagnostics(
         failed_count: result.report.failed_count(),
         quality: Some(result.quality.clone()),
         failure: failure.cloned(),
+        failure_decision: failure.map(AssetFailure::decision),
+        failure_action: failure.map(AssetFailure::action),
+        failure_required_condition: failure
+            .and_then(AssetFailure::required_condition)
+            .map(str::to_string),
         updated_at_unix_ms: unix_timestamp_millis(),
     };
     write_json(&package.diagnostics_path, &diagnostics)
@@ -2148,6 +2264,9 @@ fn write_failure_only_diagnostics(
         failed_count: 0,
         quality: None,
         failure: Some(failure.clone()),
+        failure_decision: Some(failure.decision()),
+        failure_action: Some(failure.action()),
+        failure_required_condition: failure.required_condition().map(str::to_string),
         updated_at_unix_ms: unix_timestamp_millis(),
     };
     write_json(&package.diagnostics_path, &diagnostics)

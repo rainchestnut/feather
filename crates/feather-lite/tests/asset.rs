@@ -3,13 +3,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use feather_lite::{
     ASSET_PACKAGE_CONTRACT_VERSION, AssetConversionError, AssetConversionProfile,
-    AssetConversionRequest, AssetPackageFreshnessReason, AssetPackageStatus,
-    AssetPreflightDecision, AssetPreflightRequest, AssetPreviewStatus, AssetQualityLevel,
-    BatchAssetConversionRequest, BatchItemStatus, JobConversionSettings, asset_conversion_identity,
-    batch_asset_conversion_identity, convert_asset, convert_batch_assets, ensure_asset_package,
-    ensure_batch_asset_package, explain_asset_package_freshness,
-    explain_batch_asset_package_freshness, is_asset_package_current,
-    is_batch_asset_package_current, preflight_asset,
+    AssetConversionRequest, AssetFailure, AssetFailureAction, AssetPackageFreshnessReason,
+    AssetPackageStatus, AssetPreflightDecision, AssetPreflightRequest, AssetPreviewStatus,
+    AssetQualityLevel, BatchAssetConversionRequest, BatchItemStatus, JobConversionSettings,
+    asset_conversion_identity, batch_asset_conversion_identity, convert_asset,
+    convert_batch_assets, ensure_asset_package, ensure_batch_asset_package,
+    explain_asset_package_freshness, explain_batch_asset_package_freshness,
+    is_asset_package_current, is_batch_asset_package_current, preflight_asset,
 };
 
 const SAMPLE_CACHE: &str = "\
@@ -432,8 +432,65 @@ fn preflight_asset_returns_business_failure_without_writing_package() {
             .category,
         "no_readable_lightweight_cache"
     );
+    let failure = result.failure.as_ref().expect("failure should be returned");
+    assert_eq!(
+        failure.decision(),
+        AssetPreflightDecision::NeedsReadableVisualization
+    );
+    assert_eq!(
+        failure.action(),
+        AssetFailureAction::ProvideReadableVisualization
+    );
 
     fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
+}
+
+#[test]
+fn asset_failure_exposes_business_decision_and_action() {
+    let references = AssetFailure {
+        stage: "import".to_string(),
+        category: "missing_external_reference".to_string(),
+        message: "missing part".to_string(),
+        retryable: true,
+    };
+    assert_eq!(
+        references.decision(),
+        AssetPreflightDecision::NeedsExternalReferences
+    );
+    assert_eq!(
+        references.action(),
+        AssetFailureAction::ResolveExternalReferences
+    );
+    assert_eq!(
+        references.required_condition(),
+        Some("all external references resolved through resolve_dirs or reference mappings")
+    );
+    assert_eq!(references.action().as_str(), "resolve_external_references");
+
+    let limits = AssetFailure {
+        stage: "import".to_string(),
+        category: "resource_limit_exceeded".to_string(),
+        message: "too large".to_string(),
+        retryable: true,
+    };
+    assert_eq!(
+        limits.decision(),
+        AssetPreflightDecision::ResourceLimitExceeded
+    );
+    assert_eq!(limits.action(), AssetFailureAction::IncreaseResourceLimits);
+
+    let batch = AssetFailure {
+        stage: "batch".to_string(),
+        category: "batch_item_failed".to_string(),
+        message: "batch completed with failed items".to_string(),
+        retryable: true,
+    };
+    assert_eq!(batch.decision(), AssetPreflightDecision::Failed);
+    assert_eq!(batch.action(), AssetFailureAction::ReviewBatchFailures);
+    assert_eq!(
+        batch.required_condition(),
+        Some("all failed batch items corrected or removed")
+    );
 }
 
 #[test]
@@ -947,6 +1004,14 @@ fn convert_asset_failure_writes_diagnostics_and_returns_package() {
     };
 
     assert_eq!(failure.category, "no_readable_lightweight_cache");
+    assert_eq!(
+        failure.decision(),
+        AssetPreflightDecision::NeedsReadableVisualization
+    );
+    assert_eq!(
+        failure.action(),
+        AssetFailureAction::ProvideReadableVisualization
+    );
     assert!(package.source_info_path.is_file());
     assert!(package.diagnostics_path.is_file());
     let diagnostics = parse_json(&fs::read_to_string(&package.diagnostics_path).unwrap());
@@ -954,6 +1019,18 @@ fn convert_asset_failure_writes_diagnostics_and_returns_package() {
     assert_eq!(
         diagnostics["failure"]["category"],
         "no_readable_lightweight_cache"
+    );
+    assert_eq!(
+        diagnostics["failure_decision"],
+        "needs_readable_visualization"
+    );
+    assert_eq!(
+        diagnostics["failure_action"],
+        "provide_readable_visualization"
+    );
+    assert_eq!(
+        diagnostics["failure_required_condition"],
+        "readable lightweight visualization payload"
     );
 
     fs::remove_dir_all(temp_dir).expect("temp dir should be removable");

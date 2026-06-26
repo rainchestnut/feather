@@ -300,6 +300,11 @@ Required fields in single conversion `diagnostics.json`:
   `triangle_count`: quality counts or `null`
 - `quality`: business quality object for succeeded conversions, or `null`
 - `failure`: failure object or `null`
+- `failure_decision`: business decision label for failed conversions, or `null`
+- `failure_action`: recommended recovery action label for failed conversions,
+  or `null`
+- `failure_required_condition`: missing condition required for recovery, or
+  `null`
 - `updated_at_unix_ms`: integer
 
 Required fields in batch `diagnostics.json`:
@@ -317,6 +322,11 @@ Required fields in batch `diagnostics.json`:
 - `quality`: business quality object for succeeded batch conversions or checks,
   or `null`
 - `failure`: failure object or `null`
+- `failure_decision`: business decision label for failed batches, or `null`
+- `failure_action`: recommended recovery action label for failed batches, or
+  `null`
+- `failure_required_condition`: missing condition required for recovery, or
+  `null`
 - `updated_at_unix_ms`: integer
 
 When present, `quality` includes:
@@ -335,3 +345,15 @@ When present, `quality` includes:
 
 When present, `failure` includes stable `stage`, `category`, `message`, and
 `retryable` fields.
+
+Stable `failure_decision` values are the same labels returned by
+`AssetPreflightDecision`: `needs_readable_visualization`,
+`needs_external_references`, `needs_upstream_tessellation`,
+`resource_limit_exceeded`, `unsupported_input`, `invalid_source_data`,
+`missing_data`, `io_blocked`, `export_blocked`, and `failed`.
+
+Stable `failure_action` values are `provide_readable_visualization`,
+`resolve_external_references`, `run_upstream_tessellation`,
+`increase_resource_limits`, `use_supported_input`, `repair_source_data`,
+`complete_source_package`, `check_storage_access`, `fix_export_pipeline`,
+`review_batch_failures`, and `inspect_failure`.
