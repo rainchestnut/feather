@@ -4,13 +4,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use feather_lite::{
     ASSET_PACKAGE_CONTRACT_VERSION, AssetConversionError, AssetConversionProfile,
     AssetConversionRequest, AssetFailure, AssetFailureAction, AssetPackageFreshnessReason,
-    AssetPackageStatus, AssetPreflightDecision, AssetPreflightRequest, AssetPreviewStatus,
-    AssetQualityLevel, BatchAssetConversionRequest, BatchItemStatus, JobConversionSettings,
-    asset_conversion_identity, batch_asset_conversion_identity, convert_asset,
-    convert_batch_assets, ensure_asset_package, ensure_batch_asset_package,
-    explain_asset_package_freshness, explain_batch_asset_package_freshness, inspect_asset_package,
-    is_asset_package_current, is_batch_asset_package_current, load_current_asset_package,
-    load_current_batch_asset_package, preflight_asset,
+    AssetPackageStatus, AssetPackageSummaryOperation, AssetPreflightDecision,
+    AssetPreflightRequest, AssetPreviewStatus, AssetQualityLevel, BatchAssetConversionRequest,
+    BatchItemStatus, JobConversionSettings, asset_conversion_identity,
+    batch_asset_conversion_identity, convert_asset, convert_batch_assets, ensure_asset_package,
+    ensure_batch_asset_package, explain_asset_package_freshness,
+    explain_batch_asset_package_freshness, inspect_asset_package, is_asset_package_current,
+    is_batch_asset_package_current, load_current_asset_package, load_current_batch_asset_package,
+    preflight_asset, read_asset_package_summary,
 };
 
 const SAMPLE_CACHE: &str = "\
@@ -299,6 +300,31 @@ fn inspect_asset_package_audits_single_package_without_request() {
         audit.quality.as_ref().expect("quality should exist"),
         &converted.quality
     );
+    let summary = read_asset_package_summary(&output_dir).expect("package summary should read");
+    assert!(summary.audit.usable);
+    assert_eq!(summary.items.len(), 1);
+    assert_eq!(
+        summary.output_size_bytes,
+        converted.quality.output_size_bytes
+    );
+    assert_eq!(
+        summary.metadata_size_bytes,
+        converted.quality.metadata_size_bytes
+    );
+    let item = &summary.items[0];
+    assert!(item.previewable());
+    assert_eq!(item.operation, AssetPackageSummaryOperation::Converted);
+    assert_eq!(item.output_path, converted.package.model_path);
+    assert_eq!(item.metadata_path, converted.package.metadata_path);
+    assert_eq!(item.source_format.as_deref(), Some("CATIA_CATPart"));
+    assert_eq!(item.triangle_count, Some(1));
+    let metadata = item
+        .metadata
+        .as_ref()
+        .expect("metadata summary should exist");
+    assert_eq!(metadata.source_format, "CATIA_CATPart");
+    assert_eq!(metadata.triangle_count, 1);
+    assert!(!metadata.mode.is_empty());
 
     fs::remove_file(
         converted
@@ -314,6 +340,10 @@ fn inspect_asset_package_audits_single_package_without_request() {
         incomplete.reason,
         AssetPackageFreshnessReason::MissingMetadata
     );
+    let incomplete_summary =
+        read_asset_package_summary(&output_dir).expect("package summary should read");
+    assert!(!incomplete_summary.audit.usable);
+    assert!(incomplete_summary.items.is_empty());
 
     fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
 }
@@ -919,6 +949,31 @@ fn inspect_asset_package_audits_batch_package_without_request() {
         audit.quality.as_ref().expect("quality should exist"),
         &converted.quality
     );
+    let summary = read_asset_package_summary(&output_dir).expect("package summary should read");
+    assert!(summary.audit.usable);
+    assert_eq!(summary.items.len(), 1);
+    assert_eq!(
+        summary.output_size_bytes,
+        converted.quality.output_size_bytes
+    );
+    assert_eq!(
+        summary.metadata_size_bytes,
+        converted.quality.metadata_size_bytes
+    );
+    let item = &summary.items[0];
+    assert!(item.previewable());
+    assert_eq!(item.operation, AssetPackageSummaryOperation::Converted);
+    assert_eq!(item.source_format.as_deref(), Some("CATIA_CATPart"));
+    assert_eq!(item.triangle_count, Some(1));
+    assert!(item.output_path.is_some());
+    assert!(item.metadata_path.is_some());
+    assert_eq!(
+        item.metadata
+            .as_ref()
+            .expect("metadata summary should exist")
+            .source_format,
+        "CATIA_CATPart"
+    );
 
     let output_path = match &converted.report.items[0].status {
         BatchItemStatus::Ok { output_path, .. } => std::path::PathBuf::from(output_path),
@@ -944,6 +999,17 @@ fn inspect_asset_package_audits_batch_package_without_request() {
         check_audit.quality.as_ref().expect("quality should exist"),
         &checked.quality
     );
+    let check_summary =
+        read_asset_package_summary(&check_output_dir).expect("package summary should read");
+    assert_eq!(check_summary.items.len(), 1);
+    assert_eq!(
+        check_summary.items[0].operation,
+        AssetPackageSummaryOperation::Checked
+    );
+    assert!(!check_summary.items[0].previewable());
+    assert!(check_summary.items[0].output_path.is_none());
+    assert!(check_summary.items[0].metadata.is_none());
+    assert_eq!(check_summary.items[0].triangle_count, Some(1));
 
     fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
 }

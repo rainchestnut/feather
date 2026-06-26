@@ -398,6 +398,88 @@ impl AssetPackageAudit {
     }
 }
 
+/// Read-only summary of converted artifacts inside a business asset package.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AssetPackageSummary {
+    pub audit: AssetPackageAudit,
+    pub items: Vec<AssetPackageSummaryItem>,
+    pub output_size_bytes: u64,
+    pub metadata_size_bytes: u64,
+}
+
+/// One output or checked input represented in a package summary.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AssetPackageSummaryItem {
+    pub index: usize,
+    pub operation: AssetPackageSummaryOperation,
+    pub input_path: Option<PathBuf>,
+    pub source_format: Option<String>,
+    pub output_path: Option<PathBuf>,
+    pub metadata_path: Option<PathBuf>,
+    pub output_size_bytes: u64,
+    pub metadata_size_bytes: u64,
+    pub node_count: Option<usize>,
+    pub mesh_count: Option<usize>,
+    pub primitive_count: Option<usize>,
+    pub vertex_count: Option<usize>,
+    pub triangle_count: Option<u64>,
+    pub metadata: Option<AssetPackageMetadataSummary>,
+}
+
+impl AssetPackageSummaryItem {
+    /// Returns true when this item has a GLB preview artifact.
+    pub fn previewable(&self) -> bool {
+        self.output_path.is_some()
+    }
+}
+
+/// Operation represented by one package summary item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssetPackageSummaryOperation {
+    Converted,
+    Reused,
+    Checked,
+    Failed,
+}
+
+impl AssetPackageSummaryOperation {
+    /// Returns the stable lowercase operation label for API responses and logs.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Converted => "converted",
+            Self::Reused => "reused",
+            Self::Checked => "checked",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+/// Typed summary of a GLB sidecar metadata file.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AssetPackageMetadataSummary {
+    pub source_format: String,
+    pub mode: String,
+    pub precision: String,
+    pub node_count: usize,
+    pub mesh_count: usize,
+    pub primitive_count: usize,
+    pub vertex_count: usize,
+    pub triangle_count: u64,
+    pub has_brep: bool,
+    pub brep_preserved: bool,
+    pub bbox: Option<AssetPackageBounds>,
+    pub source_path: Option<String>,
+    pub warnings: Vec<String>,
+}
+
+/// Axis-aligned bounds read from a package metadata sidecar.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AssetPackageBounds {
+    pub min: [f32; 3],
+    pub max: [f32; 3],
+}
+
 /// Stable reason codes explaining why a package can or cannot be reused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AssetPackageFreshnessReason {
@@ -986,6 +1068,27 @@ pub fn inspect_asset_package(
     }
 }
 
+/// Reads a business summary of package output artifacts.
+///
+/// The returned audit is always populated. `items` is populated only when the
+/// package is internally usable; stale or failed packages return an empty item
+/// list with the audit reason explaining why.
+pub fn read_asset_package_summary(
+    output_dir: impl AsRef<Path>,
+) -> Result<AssetPackageSummary, AssetConversionError> {
+    let output_dir = output_dir.as_ref();
+    let audit = inspect_asset_package(output_dir)?;
+    if !audit.usable {
+        return Ok(empty_asset_package_summary(audit));
+    }
+
+    match audit.kind.as_deref() {
+        Some("conversion") => read_single_asset_package_summary(audit),
+        Some("batch_conversion") => read_batch_asset_package_summary(audit),
+        _ => Ok(empty_asset_package_summary(audit)),
+    }
+}
+
 /// Returns true when an existing single-file asset package matches this request.
 pub fn is_asset_package_current(
     request: &AssetConversionRequest,
@@ -1546,6 +1649,231 @@ fn source_info_identity(source_info: &AssetSourceInfoJson) -> Option<AssetIdenti
         source_size_bytes: source_info.source_size_bytes,
         settings_fingerprint: source_info.settings_fingerprint.clone(),
     })
+}
+
+fn empty_asset_package_summary(audit: AssetPackageAudit) -> AssetPackageSummary {
+    AssetPackageSummary {
+        audit,
+        items: Vec::new(),
+        output_size_bytes: 0,
+        metadata_size_bytes: 0,
+    }
+}
+
+fn read_single_asset_package_summary(
+    audit: AssetPackageAudit,
+) -> Result<AssetPackageSummary, AssetConversionError> {
+    let package = audit.package.clone();
+    let source_info: AssetSourceInfoJson = read_json(&package.source_info_path)?;
+    let model_path = package
+        .model_path
+        .as_ref()
+        .expect("single asset package reserves model path");
+    let metadata_path = package
+        .metadata_path
+        .as_ref()
+        .expect("single asset package reserves metadata path");
+    let metadata = read_package_metadata(metadata_path)?;
+    let output_size_bytes = file_size(model_path).unwrap_or(0);
+    let metadata_size_bytes = file_size(metadata_path).unwrap_or(0);
+    let item = AssetPackageSummaryItem {
+        index: 0,
+        operation: AssetPackageSummaryOperation::Converted,
+        input_path: source_info.inputs.first().map(|input| input.path.clone()),
+        source_format: Some(metadata.source_format.clone()),
+        output_path: Some(model_path.clone()),
+        metadata_path: Some(metadata_path.clone()),
+        output_size_bytes,
+        metadata_size_bytes,
+        node_count: Some(metadata.node_count),
+        mesh_count: Some(metadata.mesh_count),
+        primitive_count: Some(metadata.primitive_count),
+        vertex_count: Some(metadata.vertex_count),
+        triangle_count: Some(metadata.triangle_count),
+        metadata: Some(metadata),
+    };
+
+    Ok(AssetPackageSummary {
+        audit,
+        items: vec![item],
+        output_size_bytes,
+        metadata_size_bytes,
+    })
+}
+
+fn read_batch_asset_package_summary(
+    audit: AssetPackageAudit,
+) -> Result<AssetPackageSummary, AssetConversionError> {
+    let manifest_path = audit
+        .package
+        .manifest_path
+        .as_ref()
+        .expect("batch asset package reserves manifest path");
+    let Some(report) = read_batch_report(manifest_path)? else {
+        return Ok(empty_asset_package_summary(audit));
+    };
+
+    let mut items = Vec::with_capacity(report.items.len());
+    for item in &report.items {
+        items.push(asset_package_summary_item_from_batch_item(item)?);
+    }
+    let output_size_bytes = items.iter().map(|item| item.output_size_bytes).sum();
+    let metadata_size_bytes = items.iter().map(|item| item.metadata_size_bytes).sum();
+    Ok(AssetPackageSummary {
+        audit,
+        items,
+        output_size_bytes,
+        metadata_size_bytes,
+    })
+}
+
+fn asset_package_summary_item_from_batch_item(
+    item: &BatchItem,
+) -> Result<AssetPackageSummaryItem, AssetConversionError> {
+    match &item.status {
+        BatchItemStatus::Ok {
+            source_format,
+            output_path,
+            metadata_path,
+            output_size_bytes,
+            metadata_size_bytes,
+            node_count,
+            mesh_count,
+            primitive_count,
+            vertex_count,
+            triangle_count,
+        } => summary_item_from_output_batch_status(OutputBatchStatusSummary {
+            item,
+            operation: AssetPackageSummaryOperation::Converted,
+            source_format,
+            output_path,
+            metadata_path,
+            output_size_bytes,
+            metadata_size_bytes,
+            node_count: *node_count,
+            mesh_count: *mesh_count,
+            primitive_count: *primitive_count,
+            vertex_count: *vertex_count,
+            triangle_count: *triangle_count,
+        }),
+        BatchItemStatus::Reused {
+            source_format,
+            output_path,
+            metadata_path,
+            output_size_bytes,
+            metadata_size_bytes,
+            node_count,
+            mesh_count,
+            primitive_count,
+            vertex_count,
+            triangle_count,
+        } => summary_item_from_output_batch_status(OutputBatchStatusSummary {
+            item,
+            operation: AssetPackageSummaryOperation::Reused,
+            source_format,
+            output_path,
+            metadata_path,
+            output_size_bytes,
+            metadata_size_bytes,
+            node_count: *node_count,
+            mesh_count: *mesh_count,
+            primitive_count: *primitive_count,
+            vertex_count: *vertex_count,
+            triangle_count: *triangle_count,
+        }),
+        BatchItemStatus::Checked {
+            source_format,
+            node_count,
+            mesh_count,
+            primitive_count,
+            vertex_count,
+            triangle_count,
+        } => Ok(AssetPackageSummaryItem {
+            index: item.index,
+            operation: AssetPackageSummaryOperation::Checked,
+            input_path: Some(PathBuf::from(&item.input_path)),
+            source_format: Some(source_format.clone()),
+            output_path: None,
+            metadata_path: None,
+            output_size_bytes: 0,
+            metadata_size_bytes: 0,
+            node_count: Some(*node_count),
+            mesh_count: Some(*mesh_count),
+            primitive_count: Some(*primitive_count),
+            vertex_count: Some(*vertex_count),
+            triangle_count: Some(*triangle_count),
+            metadata: None,
+        }),
+        BatchItemStatus::Error { .. } => Ok(AssetPackageSummaryItem {
+            index: item.index,
+            operation: AssetPackageSummaryOperation::Failed,
+            input_path: Some(PathBuf::from(&item.input_path)),
+            source_format: None,
+            output_path: None,
+            metadata_path: None,
+            output_size_bytes: 0,
+            metadata_size_bytes: 0,
+            node_count: None,
+            mesh_count: None,
+            primitive_count: None,
+            vertex_count: None,
+            triangle_count: None,
+            metadata: None,
+        }),
+    }
+}
+
+struct OutputBatchStatusSummary<'a> {
+    item: &'a BatchItem,
+    operation: AssetPackageSummaryOperation,
+    source_format: &'a str,
+    output_path: &'a str,
+    metadata_path: &'a Option<String>,
+    output_size_bytes: &'a Option<u64>,
+    metadata_size_bytes: &'a Option<u64>,
+    node_count: usize,
+    mesh_count: usize,
+    primitive_count: usize,
+    vertex_count: usize,
+    triangle_count: u64,
+}
+
+fn summary_item_from_output_batch_status(
+    status: OutputBatchStatusSummary<'_>,
+) -> Result<AssetPackageSummaryItem, AssetConversionError> {
+    let metadata_path = status.metadata_path.as_ref().map(PathBuf::from);
+    let metadata = metadata_path
+        .as_ref()
+        .map(|path| read_package_metadata(path))
+        .transpose()?;
+    Ok(AssetPackageSummaryItem {
+        index: status.item.index,
+        operation: status.operation,
+        input_path: Some(PathBuf::from(&status.item.input_path)),
+        source_format: Some(status.source_format.to_string()),
+        output_path: Some(PathBuf::from(status.output_path)),
+        metadata_path,
+        output_size_bytes: status
+            .output_size_bytes
+            .unwrap_or_else(|| file_size(Path::new(status.output_path)).unwrap_or(0)),
+        metadata_size_bytes: status.metadata_size_bytes.unwrap_or_else(|| {
+            status
+                .metadata_path
+                .as_ref()
+                .and_then(|path| file_size(Path::new(path)))
+                .unwrap_or(0)
+        }),
+        node_count: Some(status.node_count),
+        mesh_count: Some(status.mesh_count),
+        primitive_count: Some(status.primitive_count),
+        vertex_count: Some(status.vertex_count),
+        triangle_count: Some(status.triangle_count),
+        metadata,
+    })
+}
+
+fn read_package_metadata(path: &Path) -> Result<AssetPackageMetadataSummary, AssetConversionError> {
+    read_json(path)
 }
 
 fn single_asset_metadata_mismatch_reason(

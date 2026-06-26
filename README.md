@@ -162,7 +162,7 @@ use feather_lite::{
     ensure_batch_asset_package, explain_asset_package_freshness,
     explain_batch_asset_package_freshness, inspect_asset_package, inspect_path,
     is_asset_package_current, is_batch_asset_package_current, load_current_asset_package,
-    load_current_batch_asset_package, run_batch_conversion,
+    load_current_batch_asset_package, read_asset_package_summary, run_batch_conversion,
 };
 
 let inspect = inspect_path(
@@ -217,6 +217,8 @@ let freshness = explain_asset_package_freshness(&asset_request)?;
 println!("{}", freshness.reason.as_str());
 let package_audit = inspect_asset_package("./asset-package")?;
 println!("{}", package_audit.usable);
+let package_summary = read_asset_package_summary("./asset-package")?;
+println!("{}", package_summary.items.len());
 
 let batch_asset_request = BatchAssetConversionRequest::new(
     vec![PathBuf::from("./incoming-cad")],
@@ -283,6 +285,9 @@ The main embeddable operations are:
 - `inspect_asset_package`: audits an existing single or batch asset package
   directory without reading source CAD files, returning package kind, identity,
   quality or failure details, and the first internal completeness reason.
+- `read_asset_package_summary`: reads the usable package output list without
+  manual JSON parsing, including GLB paths, metadata sidecars, per-item geometry
+  counts, sidecar metadata summary, and aggregate output sizes.
 - `detect_format` and `inspect_path`: probe, asset discovery, and optional real
   import validation.
 - `convert_path_to_glb`: single-file conversion with mesh cleanup, GLB
@@ -463,6 +468,11 @@ needs to audit its internal completeness. It returns `AssetPackageAudit` without
 reading original CAD sources; request-relative freshness still belongs to
 `explain_asset_package_freshness` and
 `explain_batch_asset_package_freshness`.
+Use `read_asset_package_summary` after audit when the caller needs the actual
+lightweight result list. Single-file packages return one `converted` item with
+`model.glb` and `metadata.json`; batch packages return one item per manifest
+entry, with `converted`, `reused`, or `checked` operations and typed sidecar
+metadata when a GLB output was written.
 Failed package diagnostics keep the original `failure` object and append
 business fields such as `failure_decision=needs_readable_visualization` and
 `failure_action=provide_readable_visualization`, matching
