@@ -1,6 +1,6 @@
 //! Metadata JSON writer for conversion sidecars.
 
-use crate::document::{Aabb, LiteDocument, Transform, identity_transform};
+use crate::document::{Aabb, LiteDocument, LiteSourceUnit, Transform, identity_transform};
 use crate::json::escape_json;
 
 /// Serializes document metadata as stable JSON.
@@ -12,6 +12,18 @@ pub fn export_metadata_json(document: &LiteDocument) -> String {
     push_json_string_field(&mut json, "mode", &metadata.mode, true);
     push_json_string_field(&mut json, "precision", &metadata.precision, true);
     push_json_number_field(&mut json, "node_count", document.nodes.len() as u64, true);
+    push_json_number_field(
+        &mut json,
+        "mesh_instance_count",
+        document.mesh_instance_count() as u64,
+        true,
+    );
+    push_json_number_field(
+        &mut json,
+        "scene_depth",
+        document.scene_depth() as u64,
+        true,
+    );
     push_json_number_field(&mut json, "mesh_count", metadata.mesh_count as u64, true);
     push_json_number_field(
         &mut json,
@@ -29,6 +41,13 @@ pub fn export_metadata_json(document: &LiteDocument) -> String {
     push_json_bool_field(&mut json, "has_brep", metadata.has_brep, true);
     push_json_bool_field(&mut json, "brep_preserved", metadata.brep_preserved, true);
     push_json_bbox_field(&mut json, "bbox", scene_bbox(document), true);
+    push_json_source_units_field(
+        &mut json,
+        "source_units",
+        metadata.source_length_unit.as_ref(),
+        metadata.source_plane_angle_unit.as_ref(),
+        true,
+    );
 
     json.push_str("  \"source_path\": ");
     if let Some(source_path) = &metadata.source_path {
@@ -52,6 +71,49 @@ pub fn export_metadata_json(document: &LiteDocument) -> String {
     json.push_str("]\n");
     json.push_str("}\n");
     json
+}
+
+fn push_json_source_units_field(
+    json: &mut String,
+    key: &str,
+    length: Option<&LiteSourceUnit>,
+    plane_angle: Option<&LiteSourceUnit>,
+    comma: bool,
+) {
+    json.push_str("  \"");
+    json.push_str(key);
+    json.push_str("\": ");
+    if length.is_none() && plane_angle.is_none() {
+        json.push_str("null");
+    } else {
+        json.push('{');
+        let mut wrote_field = false;
+        if let Some(length) = length {
+            json.push_str("\"length\": ");
+            push_json_source_unit(json, length);
+            wrote_field = true;
+        }
+        if let Some(plane_angle) = plane_angle {
+            if wrote_field {
+                json.push_str(", ");
+            }
+            json.push_str("\"plane_angle\": ");
+            push_json_source_unit(json, plane_angle);
+        }
+        json.push('}');
+    }
+    if comma {
+        json.push(',');
+    }
+    json.push('\n');
+}
+
+fn push_json_source_unit(json: &mut String, unit: &LiteSourceUnit) {
+    json.push_str("{\"label\": \"");
+    json.push_str(&escape_json(&unit.label));
+    json.push_str("\", \"scale_to_si\": ");
+    json.push_str(&format_f32(unit.scale_to_si));
+    json.push('}');
 }
 
 fn push_json_bbox_field(json: &mut String, key: &str, bbox: Option<Aabb>, comma: bool) {

@@ -355,6 +355,9 @@ fn metadata_exports_scene_bbox_with_node_transforms() {
         parsed_metadata["bbox"]["max"],
         serde_json::json!([12, -1, 0])
     );
+    assert_eq!(parsed_metadata["mesh_instance_count"], 1);
+    assert_eq!(parsed_metadata["scene_depth"], 1);
+    assert_eq!(parsed_metadata["source_units"], serde_json::Value::Null);
     assert!(metadata.contains("\"bbox\": {\"min\": [10, -2, 0], \"max\": [12, -1, 0]}"));
 }
 
@@ -1979,6 +1982,14 @@ END-ISO-10303-21;";
     assert_eq!(document.metadata.mode, "step-ap242-tessellated");
     assert_eq!(document.metadata.mesh_count, 1);
     assert_eq!(document.metadata.triangle_count, 2);
+    let length_unit = document
+        .metadata
+        .source_length_unit
+        .as_ref()
+        .expect("STEP length unit should be recorded");
+    assert_eq!(length_unit.label, "inch");
+    assert_close(length_unit.scale_to_si, 0.0254);
+    assert!(document.metadata.source_plane_angle_unit.is_none());
     assert_close(document.meshes[0].bbox.max[0], 0.0508);
     assert_close(document.meshes[0].bbox.max[1], 0.0254);
     assert_close(document.meshes[0].bbox.max[2], 0.0);
@@ -1988,6 +1999,16 @@ END-ISO-10303-21;";
             .warnings
             .iter()
             .any(|warning| warning.contains("inch") && warning.contains("metres"))
+    );
+    let metadata = export_metadata_json(&document);
+    let parsed_metadata: serde_json::Value =
+        serde_json::from_str(&metadata).expect("STEP metadata should be valid JSON");
+    assert_eq!(parsed_metadata["source_units"]["length"]["label"], "inch");
+    assert_close(
+        parsed_metadata["source_units"]["length"]["scale_to_si"]
+            .as_f64()
+            .expect("length scale should be numeric") as f32,
+        0.0254,
     );
 
     let glb = export_glb(&document, &GlbExportOptions::default()).expect("GLB should export");
@@ -2008,6 +2029,8 @@ fn imports_ap242_tessellated_assembly_hierarchy() {
     assert_eq!(document.metadata.mesh_count, 2);
     assert_eq!(document.metadata.triangle_count, 3);
     assert_eq!(document.nodes.len(), 7);
+    assert_eq!(document.mesh_instance_count(), 4);
+    assert_eq!(document.scene_depth(), 3);
     let root = document
         .nodes
         .iter()
@@ -2059,6 +2082,13 @@ fn imports_native_ap214_planar_brep_box() {
     assert_eq!(document.metadata.mode, "step-brep-tessellated");
     assert_eq!(document.metadata.mesh_count, 1);
     assert_eq!(document.metadata.triangle_count, 12);
+    let length_unit = document
+        .metadata
+        .source_length_unit
+        .as_ref()
+        .expect("STEP length unit should be recorded");
+    assert_eq!(length_unit.label, "millimetre");
+    assert_close(length_unit.scale_to_si, 0.001);
     assert!(document.metadata.has_brep);
     assert!(!document.metadata.brep_preserved);
     assert_eq!(document.materials.len(), 1);
@@ -2097,6 +2127,8 @@ fn imports_ap214_brep_assembly_hierarchy_and_reuses_meshes() {
     assert_eq!(document.metadata.mesh_count, 2);
     assert_eq!(document.metadata.triangle_count, 3);
     assert_eq!(document.nodes.len(), 7);
+    assert_eq!(document.mesh_instance_count(), 4);
+    assert_eq!(document.scene_depth(), 3);
 
     let root = document
         .nodes
@@ -2124,6 +2156,9 @@ fn imports_ap214_brep_assembly_hierarchy_and_reuses_meshes() {
     let metadata = export_metadata_json(&document);
     let parsed: serde_json::Value =
         serde_json::from_str(&metadata).expect("assembly metadata should be valid JSON");
+    assert_eq!(parsed["mesh_instance_count"], 4);
+    assert_eq!(parsed["scene_depth"], 3);
+    assert_eq!(parsed["source_units"]["length"]["label"], "millimetre");
     let bbox_min = parsed["bbox"]["min"]
         .as_array()
         .expect("assembly bbox min should be an array");
@@ -2552,6 +2587,13 @@ fn tessellates_conical_step_face_with_degree_angle_unit() {
     validate_document(&coarse).expect("conical STEP document should validate");
     assert_eq!(coarse.metadata.mode, "step-brep-tessellated");
     assert_eq!(coarse.metadata.triangle_count, 9);
+    let plane_angle_unit = coarse
+        .metadata
+        .source_plane_angle_unit
+        .as_ref()
+        .expect("STEP plane-angle unit should be recorded");
+    assert_eq!(plane_angle_unit.label, "degree");
+    assert_close(plane_angle_unit.scale_to_si, std::f32::consts::PI / 180.0);
     assert_eq!(coarse.meshes[0].bbox.min[0], -0.002);
     assert_eq!(coarse.meshes[0].bbox.max[0], 0.002);
     assert_eq!(coarse.meshes[0].bbox.max[2], 0.002);

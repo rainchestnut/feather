@@ -5,7 +5,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::document::LiteDocument;
+use crate::document::{LiteDocument, LiteSourceUnit};
 use crate::importer::ImportError;
 
 use super::step_part21::{
@@ -134,6 +134,19 @@ pub fn apply_step_length_unit(document: &mut LiteDocument, unit: Option<&StepRes
         "converted STEP {} coordinates to metres with scale {}",
         unit.label, unit.scale_to_si
     ));
+}
+
+/// Records resolved STEP source units in document metadata for downstream use.
+pub fn record_step_units(document: &mut LiteDocument, units: &StepUnits) {
+    document.metadata.source_length_unit = units.length.as_ref().map(lite_source_unit);
+    document.metadata.source_plane_angle_unit = units.plane_angle.as_ref().map(lite_source_unit);
+}
+
+fn lite_source_unit(unit: &StepResolvedUnit) -> LiteSourceUnit {
+    LiteSourceUnit {
+        label: unit.label.clone(),
+        scale_to_si: unit.scale_to_si,
+    }
 }
 
 fn assign_consistent_unit(

@@ -93,6 +93,8 @@ pub struct LiteMetadata {
     pub triangle_count: u64,
     pub has_brep: bool,
     pub brep_preserved: bool,
+    pub source_length_unit: Option<LiteSourceUnit>,
+    pub source_plane_angle_unit: Option<LiteSourceUnit>,
     pub source_path: Option<String>,
     pub warnings: Vec<String>,
 }
@@ -108,10 +110,19 @@ impl LiteMetadata {
             triangle_count: 0,
             has_brep: false,
             brep_preserved: false,
+            source_length_unit: None,
+            source_plane_angle_unit: None,
             source_path: None,
             warnings: Vec::new(),
         }
     }
+}
+
+/// Source-unit metadata preserved for business consumers of conversion output.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LiteSourceUnit {
+    pub label: String,
+    pub scale_to_si: f32,
 }
 
 /// A lightweight CAD scene.
@@ -157,6 +168,20 @@ impl LiteDocument {
             .flat_map(|mesh| &mesh.primitives)
             .map(|primitive| primitive.positions.len())
             .sum()
+    }
+
+    /// Returns how many scene nodes instantiate a mesh.
+    pub fn mesh_instance_count(&self) -> usize {
+        self.nodes.iter().filter(|node| node.mesh.is_some()).count()
+    }
+
+    /// Returns the maximum root-to-leaf scene depth.
+    pub fn scene_depth(&self) -> usize {
+        root_node_indices(&self.nodes)
+            .into_iter()
+            .map(|node_index| node_depth(&self.nodes, node_index, self.nodes.len()))
+            .max()
+            .unwrap_or(0)
     }
 
     /// Ensures that every mesh is reachable by at least one scene node.
@@ -286,6 +311,20 @@ fn root_node_indices(nodes: &[LiteNode]) -> Vec<usize> {
         .enumerate()
         .filter_map(|(index, is_child)| (!is_child).then_some(index))
         .collect()
+}
+
+fn node_depth(nodes: &[LiteNode], node_index: usize, remaining_depth: usize) -> usize {
+    if remaining_depth == 0 {
+        return 0;
+    }
+    let Some(node) = nodes.get(node_index) else {
+        return 0;
+    };
+    node.children
+        .iter()
+        .map(|child| node_depth(nodes, *child, remaining_depth - 1))
+        .max()
+        .map_or(1, |child_depth| child_depth + 1)
 }
 
 /// A scene node preserving assembly hierarchy and transforms.

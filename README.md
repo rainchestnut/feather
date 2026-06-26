@@ -422,8 +422,9 @@ recognised containers from files that are actually importable.
 For assemblies, `inspect --check` uses the same `--resolve-dir` and `--map-root`
 external reference rules as conversion, avoiding false negatives during
 preflight screening.
-Conversion sidecar metadata includes source format, mode, mesh and triangle
-counts, B-Rep flags, warnings, and the transformed scene bounding box.
+Conversion sidecar metadata includes source format, mode, node, mesh instance,
+mesh, primitive, vertex, and triangle counts, B-Rep flags, source STEP units
+when available, warnings, scene depth, and the transformed scene bounding box.
 `dump-cache` extracts discovered lightweight assets and writes a manifest so
 production operators can see which cache or preview payload was actually used.
 ZIP glTF previews dump both the `.gltf` JSON and same-directory `.bin` buffers.

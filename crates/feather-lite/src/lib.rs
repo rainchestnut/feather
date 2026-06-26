@@ -91,8 +91,8 @@ pub use contracts::{
 };
 pub use diagnostics::batch_failure_category;
 pub use document::{
-    Aabb, LiteDocument, LiteMaterial, LiteMesh, LiteMetadata, LiteNode, LitePrimitive, Transform,
-    identity_transform,
+    Aabb, LiteDocument, LiteMaterial, LiteMesh, LiteMetadata, LiteNode, LitePrimitive,
+    LiteSourceUnit, Transform, identity_transform,
 };
 pub use export::glb::{
     ExportError, GlbExportOptions, GlbValidationSummary, export_glb, validate_glb_payload,

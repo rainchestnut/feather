@@ -13,7 +13,7 @@ use crate::probe::{FileFormat, ProbeResult, detect_format};
 use super::step_brep::import_brep_step;
 use super::step_part21::parse_step_records;
 use super::step_tessellated::import_tessellated_step;
-use super::step_units::{apply_step_length_unit, resolve_step_units};
+use super::step_units::{apply_step_length_unit, record_step_units, resolve_step_units};
 
 /// Imports supported tessellated and native B-Rep STEP representations.
 pub struct StepLiteImporter;
@@ -54,12 +54,14 @@ impl CadLiteImporter for StepLiteImporter {
         let records = parse_step_records(text)?;
         let units = resolve_step_units(&records)?;
         if let Some(mut document) = import_tessellated_step(&records, input.path, options)? {
+            record_step_units(&mut document, &units);
             apply_step_length_unit(&mut document, units.length.as_ref());
             return Ok(document);
         }
         if let Some(mut document) =
             import_brep_step(&records, input.path, options, units.plane_angle.as_ref())?
         {
+            record_step_units(&mut document, &units);
             if records
                 .iter()
                 .any(|record| record.kind == "CONICAL_SURFACE")
