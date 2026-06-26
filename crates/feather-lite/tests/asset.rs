@@ -334,6 +334,14 @@ fn inspect_asset_package_audits_single_package_without_request() {
         summary_json["items"][0]["metadata"]["source_format"],
         "CATIA_CATPart"
     );
+    assert_eq!(
+        summary_json["items"][0]["metadata"]["scene_summary"]["root_names"],
+        serde_json::json!(["Tri"])
+    );
+    assert_eq!(
+        summary_json["items"][0]["metadata"]["source_units"],
+        serde_json::Value::Null
+    );
     assert_eq!(summary.items.len(), 1);
     assert_eq!(
         summary.output_size_bytes,
@@ -356,6 +364,16 @@ fn inspect_asset_package_audits_single_package_without_request() {
         .expect("metadata summary should exist");
     assert_eq!(metadata.source_format, "CATIA_CATPart");
     assert_eq!(metadata.triangle_count, 1);
+    assert_eq!(metadata.mesh_instance_count, Some(1));
+    assert_eq!(metadata.scene_depth, Some(1));
+    assert!(metadata.source_units.is_none());
+    let scene_summary = metadata
+        .scene_summary
+        .as_ref()
+        .expect("scene summary should be read");
+    assert_eq!(scene_summary.root_names, vec!["Tri"]);
+    assert_eq!(scene_summary.unique_part_count, 1);
+    assert_eq!(scene_summary.part_instance_count, 1);
     assert!(!metadata.mode.is_empty());
 
     fs::remove_file(
@@ -379,6 +397,68 @@ fn inspect_asset_package_audits_single_package_without_request() {
         read_asset_package_summary(&output_dir).expect("package summary should read");
     assert!(!incomplete_summary.audit.usable);
     assert!(incomplete_summary.items.is_empty());
+
+    fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
+}
+
+#[test]
+fn read_asset_package_summary_includes_step_units_and_scene_summary() {
+    let temp_dir = unique_temp_dir("asset-summary-step-details");
+    fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+    let input_path = temp_dir.join("assembly.step");
+    let output_dir = temp_dir.join("asset");
+    fs::write(
+        &input_path,
+        include_bytes!("../../../tests/fixtures/sample_ap214_brep_assembly.step"),
+    )
+    .expect("STEP fixture should be written");
+
+    let converted = convert_asset(&AssetConversionRequest::new(&input_path, &output_dir))
+        .expect("STEP asset conversion should succeed");
+    assert_eq!(converted.source_format, "STEP");
+
+    let summary = read_asset_package_summary(&output_dir).expect("package summary should read");
+    assert_eq!(summary.items.len(), 1);
+    let metadata = summary.items[0]
+        .metadata
+        .as_ref()
+        .expect("metadata summary should be read");
+    let source_units = metadata
+        .source_units
+        .as_ref()
+        .expect("STEP source units should be read");
+    let length = source_units
+        .length
+        .as_ref()
+        .expect("STEP length unit should be read");
+    assert_eq!(length.label, "millimetre");
+    assert!((length.scale_to_si - 0.001).abs() < 1.0e-9);
+    assert!(source_units.plane_angle.is_none());
+
+    let scene_summary = metadata
+        .scene_summary
+        .as_ref()
+        .expect("STEP scene summary should be read");
+    assert_eq!(scene_summary.root_names, vec!["RootAssembly"]);
+    assert_eq!(scene_summary.assembly_node_count, 3);
+    assert_eq!(scene_summary.unique_part_count, 2);
+    assert_eq!(scene_summary.part_instance_count, 4);
+    assert_eq!(scene_summary.instanced_part_count, 2);
+    assert_eq!(scene_summary.scene_depth, 3);
+
+    let summary_json = parse_json(&summary.to_json_string());
+    assert_eq!(
+        summary_json["items"][0]["metadata"]["source_units"]["length"]["label"],
+        "millimetre"
+    );
+    assert_eq!(
+        summary_json["items"][0]["metadata"]["scene_summary"]["root_names"],
+        serde_json::json!(["RootAssembly"])
+    );
+    assert_eq!(
+        summary_json["items"][0]["metadata"]["scene_summary"]["unique_part_count"],
+        2
+    );
 
     fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
 }

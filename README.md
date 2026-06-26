@@ -299,7 +299,8 @@ The main embeddable operations are:
   quality or failure details, and the first internal completeness reason.
 - `read_asset_package_summary`: reads the usable package output list without
   manual JSON parsing, including GLB paths, metadata sidecars, per-item geometry
-  counts, sidecar metadata summary, and aggregate output sizes.
+  counts, source units, scene summaries, sidecar metadata summary, and aggregate
+  output sizes.
 - `business_status()` methods on preflight, conversion, package audit, and
   package summary results: expose a unified `ready_to_convert`, `converted`,
   `preview_ready`, or `needs_action` state for UI and orchestration.

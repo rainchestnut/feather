@@ -647,6 +647,8 @@ pub struct AssetPackageMetadataSummary {
     pub mode: String,
     pub precision: String,
     pub node_count: usize,
+    pub mesh_instance_count: Option<usize>,
+    pub scene_depth: Option<usize>,
     pub mesh_count: usize,
     pub primitive_count: usize,
     pub vertex_count: usize,
@@ -654,8 +656,36 @@ pub struct AssetPackageMetadataSummary {
     pub has_brep: bool,
     pub brep_preserved: bool,
     pub bbox: Option<AssetPackageBounds>,
+    pub source_units: Option<AssetPackageSourceUnits>,
+    pub scene_summary: Option<AssetPackageSceneSummary>,
     pub source_path: Option<String>,
     pub warnings: Vec<String>,
+}
+
+/// Source-unit summary read from a package metadata sidecar.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AssetPackageSourceUnits {
+    pub length: Option<AssetPackageSourceUnit>,
+    pub plane_angle: Option<AssetPackageSourceUnit>,
+}
+
+/// One source unit and its scale to the corresponding SI unit.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AssetPackageSourceUnit {
+    pub label: String,
+    pub scale_to_si: f32,
+}
+
+/// Scene hierarchy and part-reuse summary read from package metadata.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssetPackageSceneSummary {
+    pub root_count: usize,
+    pub root_names: Vec<String>,
+    pub assembly_node_count: usize,
+    pub unique_part_count: usize,
+    pub part_instance_count: usize,
+    pub instanced_part_count: usize,
+    pub scene_depth: usize,
 }
 
 /// Axis-aligned bounds read from a package metadata sidecar.
