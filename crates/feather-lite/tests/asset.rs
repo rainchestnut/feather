@@ -11,7 +11,7 @@ use feather_lite::{
     ensure_batch_asset_package, explain_asset_package_freshness,
     explain_batch_asset_package_freshness, inspect_asset_package, is_asset_package_current,
     is_batch_asset_package_current, load_current_asset_package, load_current_batch_asset_package,
-    preflight_asset, read_asset_package_summary,
+    preflight_asset, preflight_batch_assets, read_asset_package_summary,
 };
 
 const SAMPLE_CACHE: &str = "\
@@ -575,6 +575,57 @@ fn preflight_asset_returns_business_failure_without_writing_package() {
         failure.action(),
         AssetFailureAction::ProvideReadableVisualization
     );
+    assert!(!result.ready());
+    assert_eq!(
+        result.action(),
+        Some(AssetFailureAction::ProvideReadableVisualization)
+    );
+
+    fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
+}
+
+#[test]
+fn preflight_batch_assets_returns_aggregate_business_decision_without_writing_package() {
+    let temp_dir = unique_temp_dir("asset-batch-preflight");
+    let source_dir = temp_dir.join("incoming");
+    fs::create_dir_all(&source_dir).expect("source dir should be created");
+    let ready_path = source_dir.join("ready.CATPart");
+    let blocked_path = source_dir.join("blocked.CATPart");
+    let output_dir = source_dir.join("asset-package");
+    fs::write(
+        &ready_path,
+        format!("CATPart private payload prefix\n{SAMPLE_CACHE}\nprivate suffix"),
+    )
+    .expect("ready fixture should be written");
+    fs::write(&blocked_path, "CATPart private payload without cache")
+        .expect("blocked fixture should be written");
+
+    let request = BatchAssetConversionRequest::new(vec![source_dir.clone()], &output_dir);
+    let result = preflight_batch_assets(&request).expect("batch preflight should run");
+
+    assert!(!output_dir.exists());
+    assert!(!result.ready());
+    assert_eq!(result.input_count, 2);
+    assert_eq!(result.ready_count, 1);
+    assert_eq!(result.blocked_count, 1);
+    assert_eq!(
+        result.decision,
+        AssetPreflightDecision::NeedsReadableVisualization
+    );
+    assert_eq!(
+        result.action,
+        Some(AssetFailureAction::ProvideReadableVisualization)
+    );
+    assert!(
+        result
+            .items
+            .iter()
+            .any(|item| item.input_path == ready_path && item.result.ready())
+    );
+    assert!(result.items.iter().any(|item| {
+        item.input_path == blocked_path
+            && item.result.decision == AssetPreflightDecision::NeedsReadableVisualization
+    }));
 
     fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
 }
@@ -645,6 +696,8 @@ fn preflight_asset_returns_business_ready_decision_and_quality() {
     assert!(result.importable);
     assert_eq!(result.decision, AssetPreflightDecision::Ready);
     assert_eq!(result.decision.as_str(), "ready");
+    assert!(result.ready());
+    assert_eq!(result.action(), None);
     assert!(result.required_condition.is_none());
     assert!(result.failure.is_none());
     assert_eq!(result.node_count, Some(1));

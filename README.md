@@ -162,7 +162,8 @@ use feather_lite::{
     ensure_batch_asset_package, explain_asset_package_freshness,
     explain_batch_asset_package_freshness, inspect_asset_package, inspect_path,
     is_asset_package_current, is_batch_asset_package_current, load_current_asset_package,
-    load_current_batch_asset_package, read_asset_package_summary, run_batch_conversion,
+    load_current_batch_asset_package, preflight_batch_assets, read_asset_package_summary,
+    run_batch_conversion,
 };
 
 let inspect = inspect_path(
@@ -224,6 +225,8 @@ let batch_asset_request = BatchAssetConversionRequest::new(
     vec![PathBuf::from("./incoming-cad")],
     PathBuf::from("./batch-asset-package"),
 );
+let batch_preflight = preflight_batch_assets(&batch_asset_request)?;
+println!("{}", batch_preflight.decision.as_str());
 let planned_batch_asset = batch_asset_conversion_identity(&batch_asset_request)?;
 println!("{}", planned_batch_asset.settings_fingerprint);
 let batch_asset = ensure_batch_asset_package(&batch_asset_request)?;
@@ -259,14 +262,17 @@ println!("job {} {}", job.job_id, job.status.as_str());
 The main embeddable operations are:
 
 - `ensure_asset_package`, `ensure_batch_asset_package`, `convert_asset`,
-  `convert_batch_assets`, and `preflight_asset`: business facade APIs that write
+  `convert_batch_assets`, `preflight_asset`, and `preflight_batch_assets`:
+  business facade APIs that write
   or reuse a standard artifact package and hide low-level mesh options behind
   `AssetConversionProfile`; conversion results include `asset_id`, source
   SHA-256, source byte size, settings fingerprint, and an `AssetQualityReport`
   with preview readiness, geometry size class, aggregate counts, and artifact
   sizes. `preflight_asset` performs a real import check without writing
   artifacts and returns a stable `AssetPreflightDecision`, optional
-  `required_condition`, geometry counts, and preflight quality. Failed business
+  `required_condition`, geometry counts, and preflight quality.
+  `preflight_batch_assets` applies the same decision/action contract to a
+  discovered batch input set without writing a package. Failed business
   conversions return `AssetFailure`, whose `decision()` and `action()` methods
   expose stable routing labels for recovery workflows.
 - `asset_conversion_identity` and `batch_asset_conversion_identity`: compute the
@@ -457,6 +463,8 @@ Successful asset results also expose `quality`, a business-level
 in profiles (`50k`, `150k`, and `500k`). Batch check-only runs can have visual
 geometry counts while still reporting `no_preview_output` because they do not
 write GLB preview artifacts.
+Use `preflight_batch_assets` to get one `AssetPreflightDecision` per discovered
+input plus an aggregate decision/action before creating or rewriting a package.
 For UI, logs, or orchestration code that needs more than a boolean,
 `explain_asset_package_freshness` and
 `explain_batch_asset_package_freshness` return `AssetPackageFreshness` with a

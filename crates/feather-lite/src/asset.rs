@@ -130,6 +130,31 @@ impl BatchAssetConversionRequest {
     }
 }
 
+/// Batch preflight result without writing conversion artifacts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatchAssetPreflightResult {
+    pub decision: AssetPreflightDecision,
+    pub action: Option<AssetFailureAction>,
+    pub input_count: usize,
+    pub ready_count: usize,
+    pub blocked_count: usize,
+    pub items: Vec<BatchAssetPreflightItem>,
+}
+
+impl BatchAssetPreflightResult {
+    /// Returns true when every discovered input is ready for conversion.
+    pub fn ready(&self) -> bool {
+        self.decision == AssetPreflightDecision::Ready
+    }
+}
+
+/// One input result inside a batch preflight.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatchAssetPreflightItem {
+    pub input_path: PathBuf,
+    pub result: AssetPreflightResult,
+}
+
 /// Lightweight preflight request for a single source.
 #[derive(Debug, Clone)]
 pub struct AssetPreflightRequest {
@@ -561,6 +586,18 @@ pub struct AssetPreflightResult {
     pub failure: Option<AssetFailure>,
 }
 
+impl AssetPreflightResult {
+    /// Returns true when this source can be imported for conversion.
+    pub fn ready(&self) -> bool {
+        self.decision == AssetPreflightDecision::Ready
+    }
+
+    /// Returns the recommended action when this preflight is blocked.
+    pub fn action(&self) -> Option<AssetFailureAction> {
+        self.failure.as_ref().map(AssetFailure::action)
+    }
+}
+
 /// Business decision returned by `preflight_asset`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -962,6 +999,48 @@ pub fn preflight_asset(
         vertex_count: import_check.vertex_count,
         triangle_count: import_check.triangle_count,
         failure,
+    })
+}
+
+/// Performs real import preflight for all discovered batch inputs without writing artifacts.
+pub fn preflight_batch_assets(
+    request: &BatchAssetConversionRequest,
+) -> Result<BatchAssetPreflightResult, AssetConversionError> {
+    let package = batch_asset_package(&request.output_dir);
+    let input_paths = collect_batch_input_paths(&request.input_paths, &package.root_dir)
+        .map_err(|error| batch_collect_error(package.clone(), error))?;
+    if input_paths.is_empty() {
+        return Err(empty_batch_error(package));
+    }
+
+    let mut items = Vec::with_capacity(input_paths.len());
+    for input_path in input_paths {
+        let item_request = AssetPreflightRequest {
+            input_path: input_path.clone(),
+            profile: request.profile.clone(),
+            resolve_dirs: request.resolve_dirs.clone(),
+            reference_path_mappings: request.reference_path_mappings.clone(),
+            limits: request.limits,
+        };
+        let result = preflight_asset(&item_request)?;
+        items.push(BatchAssetPreflightItem { input_path, result });
+    }
+
+    let ready_count = items.iter().filter(|item| item.result.ready()).count();
+    let blocked = items.iter().find(|item| !item.result.ready());
+    let decision = blocked
+        .map(|item| item.result.decision)
+        .unwrap_or(AssetPreflightDecision::Ready);
+    let action = blocked.and_then(|item| item.result.action());
+    let input_count = items.len();
+
+    Ok(BatchAssetPreflightResult {
+        decision,
+        action,
+        input_count,
+        ready_count,
+        blocked_count: input_count - ready_count,
+        items,
     })
 }
 
