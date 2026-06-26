@@ -160,8 +160,8 @@ use feather_lite::{
     LocalJobStore, ReferencePathMapping, asset_conversion_identity,
     batch_asset_conversion_identity, convert_path_to_glb, ensure_asset_package,
     ensure_batch_asset_package, explain_asset_package_freshness,
-    explain_batch_asset_package_freshness, inspect_path, is_asset_package_current,
-    is_batch_asset_package_current, load_current_asset_package,
+    explain_batch_asset_package_freshness, inspect_asset_package, inspect_path,
+    is_asset_package_current, is_batch_asset_package_current, load_current_asset_package,
     load_current_batch_asset_package, run_batch_conversion,
 };
 
@@ -215,6 +215,8 @@ if let Some(current_asset) = load_current_asset_package(&asset_request)? {
 println!("{}", asset.asset.quality.preview_status.as_str());
 let freshness = explain_asset_package_freshness(&asset_request)?;
 println!("{}", freshness.reason.as_str());
+let package_audit = inspect_asset_package("./asset-package")?;
+println!("{}", package_audit.usable);
 
 let batch_asset_request = BatchAssetConversionRequest::new(
     vec![PathBuf::from("./incoming-cad")],
@@ -278,6 +280,9 @@ The main embeddable operations are:
 - `load_current_asset_package` and `load_current_batch_asset_package`: read and
   validate an existing package without triggering conversion, returning `None`
   when the package is missing, failed, incomplete, or stale.
+- `inspect_asset_package`: audits an existing single or batch asset package
+  directory without reading source CAD files, returning package kind, identity,
+  quality or failure details, and the first internal completeness reason.
 - `detect_format` and `inspect_path`: probe, asset discovery, and optional real
   import validation.
 - `convert_path_to_glb`: single-file conversion with mesh cleanup, GLB
@@ -453,6 +458,11 @@ For UI, logs, or orchestration code that needs more than a boolean,
 stable reason label such as `source_changed`, `settings_changed`,
 `missing_metadata`, `missing_manifest`, `manifest_mismatch`,
 `output_artifact_missing`, or `diagnostics_failed`.
+Use `inspect_asset_package` when the caller only has a package directory and
+needs to audit its internal completeness. It returns `AssetPackageAudit` without
+reading original CAD sources; request-relative freshness still belongs to
+`explain_asset_package_freshness` and
+`explain_batch_asset_package_freshness`.
 Failed package diagnostics keep the original `failure` object and append
 business fields such as `failure_decision=needs_readable_visualization` and
 `failure_action=provide_readable_visualization`, matching

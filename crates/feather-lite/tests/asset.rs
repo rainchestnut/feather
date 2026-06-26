@@ -8,7 +8,7 @@ use feather_lite::{
     AssetQualityLevel, BatchAssetConversionRequest, BatchItemStatus, JobConversionSettings,
     asset_conversion_identity, batch_asset_conversion_identity, convert_asset,
     convert_batch_assets, ensure_asset_package, ensure_batch_asset_package,
-    explain_asset_package_freshness, explain_batch_asset_package_freshness,
+    explain_asset_package_freshness, explain_batch_asset_package_freshness, inspect_asset_package,
     is_asset_package_current, is_batch_asset_package_current, load_current_asset_package,
     load_current_batch_asset_package, preflight_asset,
 };
@@ -252,6 +252,67 @@ fn load_current_asset_package_reads_only_current_package() {
         load_current_asset_package(&request)
             .expect("stale package load should run")
             .is_none()
+    );
+
+    fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
+}
+
+#[test]
+fn inspect_asset_package_audits_single_package_without_request() {
+    let temp_dir = unique_temp_dir("asset-inspect-package-single");
+    fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+    let input_path = temp_dir.join("fixture.CATPart");
+    let output_dir = temp_dir.join("asset");
+    fs::write(
+        &input_path,
+        format!("CATPart private payload prefix\n{SAMPLE_CACHE}\nprivate suffix"),
+    )
+    .expect("fixture should be written");
+
+    let missing = inspect_asset_package(&output_dir).expect("package audit should run");
+    assert!(!missing.usable);
+    assert_eq!(
+        missing.reason,
+        AssetPackageFreshnessReason::MissingSourceInfo
+    );
+    assert!(missing.kind.is_none());
+    assert!(missing.identity.is_none());
+
+    let converted = convert_asset(&AssetConversionRequest::new(&input_path, &output_dir))
+        .expect("asset conversion should succeed");
+    let audit = inspect_asset_package(&output_dir).expect("package audit should run");
+    assert!(audit.usable);
+    assert!(audit.previewable());
+    assert_eq!(audit.reason, AssetPackageFreshnessReason::Current);
+    assert_eq!(audit.kind.as_deref(), Some("conversion"));
+    assert_eq!(audit.status.as_deref(), Some("succeeded"));
+    assert_eq!(
+        audit
+            .identity
+            .as_ref()
+            .expect("identity should exist")
+            .asset_id,
+        converted.asset_id
+    );
+    assert_eq!(audit.input_count, 1);
+    assert_eq!(
+        audit.quality.as_ref().expect("quality should exist"),
+        &converted.quality
+    );
+
+    fs::remove_file(
+        converted
+            .package
+            .metadata_path
+            .as_ref()
+            .expect("metadata path should be reserved"),
+    )
+    .expect("metadata should be removable");
+    let incomplete = inspect_asset_package(&output_dir).expect("package audit should run");
+    assert!(!incomplete.usable);
+    assert_eq!(
+        incomplete.reason,
+        AssetPackageFreshnessReason::MissingMetadata
     );
 
     fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
@@ -826,6 +887,68 @@ fn load_current_batch_asset_package_reads_only_current_package() {
 }
 
 #[test]
+fn inspect_asset_package_audits_batch_package_without_request() {
+    let temp_dir = unique_temp_dir("asset-inspect-package-batch");
+    fs::create_dir_all(&temp_dir).expect("temp dir should be created");
+    let input_path = temp_dir.join("fixture.CATPart");
+    let output_dir = temp_dir.join("batch-asset");
+    fs::write(
+        &input_path,
+        format!("CATPart private payload prefix\n{SAMPLE_CACHE}\nprivate suffix"),
+    )
+    .expect("fixture should be written");
+
+    let request = BatchAssetConversionRequest::new(vec![input_path.clone()], &output_dir);
+    let converted = convert_batch_assets(&request).expect("batch conversion should succeed");
+    let audit = inspect_asset_package(&output_dir).expect("package audit should run");
+    assert!(audit.usable);
+    assert!(audit.previewable());
+    assert_eq!(audit.reason, AssetPackageFreshnessReason::Current);
+    assert_eq!(audit.kind.as_deref(), Some("batch_conversion"));
+    assert_eq!(audit.status.as_deref(), Some("succeeded"));
+    assert_eq!(
+        audit
+            .identity
+            .as_ref()
+            .expect("identity should exist")
+            .asset_id,
+        converted.asset_id
+    );
+    assert_eq!(audit.input_count, 1);
+    assert_eq!(
+        audit.quality.as_ref().expect("quality should exist"),
+        &converted.quality
+    );
+
+    let output_path = match &converted.report.items[0].status {
+        BatchItemStatus::Ok { output_path, .. } => std::path::PathBuf::from(output_path),
+        _ => panic!("batch item should be converted"),
+    };
+    fs::remove_file(output_path).expect("batch output should be removable");
+    let missing_output = inspect_asset_package(&output_dir).expect("package audit should run");
+    assert!(!missing_output.usable);
+    assert_eq!(
+        missing_output.reason,
+        AssetPackageFreshnessReason::OutputArtifactMissing
+    );
+
+    let check_output_dir = temp_dir.join("check-batch-asset");
+    let mut check_request = BatchAssetConversionRequest::new(vec![input_path], &check_output_dir);
+    check_request.check_only = true;
+    let checked = convert_batch_assets(&check_request).expect("batch check should succeed");
+    let check_audit = inspect_asset_package(&check_output_dir).expect("package audit should run");
+    assert!(check_audit.usable);
+    assert!(!check_audit.previewable());
+    assert_eq!(check_audit.reason, AssetPackageFreshnessReason::Current);
+    assert_eq!(
+        check_audit.quality.as_ref().expect("quality should exist"),
+        &checked.quality
+    );
+
+    fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
+}
+
+#[test]
 fn ensure_batch_asset_package_rebuilds_when_source_or_mode_changes() {
     let temp_dir = unique_temp_dir("asset-batch-ensure-stale");
     fs::create_dir_all(&temp_dir).expect("temp dir should be created");
@@ -1113,6 +1236,18 @@ fn convert_asset_failure_writes_diagnostics_and_returns_package() {
     assert_eq!(
         diagnostics["failure_required_condition"],
         "readable lightweight visualization payload"
+    );
+    let audit = inspect_asset_package(&output_dir).expect("package audit should run");
+    assert!(!audit.usable);
+    assert_eq!(audit.reason, AssetPackageFreshnessReason::DiagnosticsFailed);
+    assert_eq!(audit.status.as_deref(), Some("failed"));
+    assert_eq!(
+        audit
+            .failure
+            .as_ref()
+            .expect("failure should be included")
+            .action(),
+        AssetFailureAction::ProvideReadableVisualization
     );
 
     fs::remove_dir_all(temp_dir).expect("temp dir should be removable");
