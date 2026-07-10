@@ -178,7 +178,7 @@ fn asset_conversion_identity_matches_conversion_and_effective_settings() {
     // fingerprint together instead of silently reusing old asset packages.
     assert_eq!(
         planned.settings_fingerprint,
-        "5c0ec0d1910710ecfbff70fae10aabe4ae4677463e1235782c9df8b4fdfc6bd3"
+        "cc80f66737ae5ce21c3d8478fc4626dc6ca1079dd4cbf9d8cbb07abde0e88e27"
     );
 
     let converted = convert_asset(&request).expect("asset conversion should succeed");

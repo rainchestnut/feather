@@ -35,7 +35,7 @@ const MEDIUM_TRIANGLE_LIMIT: u64 = 150_000;
 const HEAVY_TRIANGLE_LIMIT: u64 = 500_000;
 // Bump this whenever conversion output can change without a settings change,
 // so persisted asset packages cannot silently reuse artifacts from old logic.
-const CONVERSION_ENGINE_REVISION: &str = "feather.conversion-engine.v1";
+const CONVERSION_ENGINE_REVISION: &str = "feather.conversion-engine.v2";
 
 /// Business profile used to select conversion quality without exposing low-level knobs.
 #[derive(Debug, Clone, Default, PartialEq)]

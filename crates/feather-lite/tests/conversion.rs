@@ -3420,6 +3420,396 @@ fn rejects_skew_ellipse_linear_extrusion_surface() {
 }
 
 #[test]
+fn tessellates_line_revolution_plane_step_face() {
+    let fixture = String::from_utf8(
+        include_bytes!("../../../tests/fixtures/sample_ap214_linear_extrusion_plane_brep.step")
+            .to_vec(),
+    )
+    .expect("fixture should be UTF-8")
+    .replace(
+        "#90=SURFACE_OF_LINEAR_EXTRUSION('',#50,#41);",
+        "#32=DIRECTION('',(0.,0.,1.));\n#95=AXIS1_PLACEMENT('',#10,$);\n#90=SURFACE_OF_REVOLUTION('',#50,#95);",
+    );
+    let input = InputFile::new(
+        Some(std::path::Path::new("line-revolution-plane.step")),
+        fixture.as_bytes(),
+    );
+
+    let document = ImporterRegistry::default()
+        .import(&input, &ImportOptions::default())
+        .expect("LINE SURFACE_OF_REVOLUTION should normalize to a plane");
+
+    validate_document(&document).expect("line-revolution plane should validate");
+    assert_eq!(document.metadata.triangle_count, 2);
+    assert_eq!(document.meshes[0].bbox.max, [0.002, 0.001, 0.0]);
+    assert!(
+        document.meshes[0].primitives[0]
+            .normals
+            .iter()
+            .all(|normal| normal[2] < -0.99)
+    );
+}
+
+#[test]
+fn tessellates_line_revolution_cylinder_step_face() {
+    let fixture = String::from_utf8(
+        include_bytes!("../../../tests/fixtures/sample_ap214_linear_extrusion_cylinder_brep.step")
+            .to_vec(),
+    )
+    .expect("fixture should be UTF-8")
+    .replace(
+        "#100=SURFACE_OF_LINEAR_EXTRUSION('',#60,#40);",
+        "#95=AXIS1_PLACEMENT('',#14,#30);\n#100=SURFACE_OF_REVOLUTION('',#63,#95);",
+    );
+    let input = InputFile::new(
+        Some(std::path::Path::new("line-revolution-cylinder.step")),
+        fixture.as_bytes(),
+    );
+
+    let document = ImporterRegistry::default()
+        .import(
+            &input,
+            &ImportOptions {
+                max_lod_error: 0.1,
+                ..ImportOptions::default()
+            },
+        )
+        .expect("parallel LINE SURFACE_OF_REVOLUTION should normalize to a cylinder");
+
+    validate_document(&document).expect("line-revolution cylinder should validate");
+    assert_eq!(document.metadata.triangle_count, 8);
+    assert!(document.meshes[0].primitives[0].normals[0][0] < -0.99);
+    assert_eq!(document.meshes[0].bbox.max[2], 0.002);
+}
+
+#[test]
+fn tessellates_line_revolution_cone_step_face() {
+    let fixture = String::from_utf8(
+        include_bytes!("../../../tests/fixtures/sample_ap214_linear_extrusion_cylinder_brep.step")
+            .to_vec(),
+    )
+    .expect("fixture should be UTF-8")
+    .replace(
+        "#12=CARTESIAN_POINT('',(-1.,0.,2.));",
+        "#12=CARTESIAN_POINT('',(-2.,0.,2.));",
+    )
+    .replace(
+        "#13=CARTESIAN_POINT('',(1.,0.,2.));",
+        "#13=CARTESIAN_POINT('',(2.,0.,2.));",
+    )
+    .replace(
+        "#32=DIRECTION('',(0.,0.,-1.));",
+        "#32=DIRECTION('',(0.,0.,-1.));\n#34=DIRECTION('',(-1.,0.,2.));\n#35=DIRECTION('',(-1.,0.,-2.));",
+    )
+    .replace(
+        "#41=VECTOR('',#32,1.);",
+        "#41=VECTOR('',#32,1.);\n#42=VECTOR('',#34,1.);\n#43=VECTOR('',#35,1.);",
+    )
+    .replace("#61=CIRCLE('',#51,1.);", "#61=CIRCLE('',#51,2.);")
+    .replace("#62=LINE('',#11,#40);", "#62=LINE('',#11,#42);")
+    .replace("#63=LINE('',#13,#41);", "#63=LINE('',#13,#43);")
+    .replace(
+        "#100=SURFACE_OF_LINEAR_EXTRUSION('',#60,#40);",
+        "#95=AXIS1_PLACEMENT('',#14,#30);\n#100=SURFACE_OF_REVOLUTION('',#62,#95);",
+    );
+    let input = InputFile::new(
+        Some(std::path::Path::new("line-revolution-cone.step")),
+        fixture.as_bytes(),
+    );
+
+    let document = ImporterRegistry::default()
+        .import(
+            &input,
+            &ImportOptions {
+                max_lod_error: 0.1,
+                ..ImportOptions::default()
+            },
+        )
+        .expect("intersecting LINE SURFACE_OF_REVOLUTION should normalize to a cone");
+
+    validate_document(&document).expect("line-revolution cone should validate");
+    assert!(document.metadata.triangle_count >= 8);
+    assert_eq!(document.meshes[0].bbox.min[0], -0.002);
+    assert_eq!(document.meshes[0].bbox.max[0], 0.002);
+    assert_eq!(document.meshes[0].bbox.max[2], 0.002);
+}
+
+#[test]
+fn tessellates_circle_revolution_sphere_step_face() {
+    let fixture = String::from_utf8(
+        include_bytes!("../../../tests/fixtures/sample_ap214_spherical_brep.step").to_vec(),
+    )
+    .expect("fixture should be UTF-8")
+    .replace(
+        "#100=SPHERICAL_SURFACE('',#50,1.);",
+        "#95=AXIS1_PLACEMENT('',#14,#30);\n#100=SURFACE_OF_REVOLUTION('',#61,#95);",
+    );
+    let input = InputFile::new(
+        Some(std::path::Path::new("circle-revolution-sphere.step")),
+        fixture.as_bytes(),
+    );
+
+    let document = ImporterRegistry::default()
+        .import(
+            &input,
+            &ImportOptions {
+                max_lod_error: 0.05,
+                ..ImportOptions::default()
+            },
+        )
+        .expect("centered CIRCLE SURFACE_OF_REVOLUTION should normalize to a sphere");
+
+    validate_document(&document).expect("circle-revolution sphere should validate");
+    assert!(document.metadata.triangle_count > 2);
+    assert!(document.meshes[0].bbox.max[2] > 0.0007);
+    assert!(document.meshes[0].bbox.max[2] < 0.00071);
+}
+
+#[test]
+fn tessellates_circle_revolution_ring_torus_step_face() {
+    let direct_step = include_bytes!("../../../tests/fixtures/sample_ap214_toroidal_brep.step");
+    let fixture = String::from_utf8(direct_step.to_vec())
+        .expect("fixture should be UTF-8")
+        .replace(
+            "#100=TOROIDAL_SURFACE('',#50,2.,1.);",
+            "#95=AXIS1_PLACEMENT('',#14,#30);\n#100=SURFACE_OF_REVOLUTION('',#63,#95);",
+        );
+    let input = InputFile::new(
+        Some(std::path::Path::new("circle-revolution-torus.step")),
+        fixture.as_bytes(),
+    );
+    let direct_input = InputFile::new(
+        Some(std::path::Path::new("circle-revolution-torus.step")),
+        direct_step,
+    );
+    let options = ImportOptions {
+        max_lod_error: 0.05,
+        ..ImportOptions::default()
+    };
+
+    let document = ImporterRegistry::default()
+        .import(&input, &options)
+        .expect("offset CIRCLE SURFACE_OF_REVOLUTION should normalize to a ring torus");
+    let direct = ImporterRegistry::default()
+        .import(&direct_input, &options)
+        .expect("native ring torus should remain importable");
+
+    validate_document(&document).expect("circle-revolution torus should validate");
+    assert_eq!(document, direct);
+    assert!(document.metadata.triangle_count > 2);
+    assert_eq!(document.meshes[0].bbox.max[0], 0.003);
+    assert_eq!(document.meshes[0].bbox.max[2], 0.001);
+}
+
+#[test]
+fn tessellates_circle_revolution_ring_torus_with_inner_bound() {
+    let direct_step =
+        include_bytes!("../../../tests/fixtures/sample_ap214_toroidal_hole_brep.step");
+    let fixture = String::from_utf8(direct_step.to_vec())
+        .expect("fixture should be UTF-8")
+        .replace(
+            "#100=TOROIDAL_SURFACE('',#50,2.,1.);",
+            "#95=AXIS1_PLACEMENT('',#14,#40);\n#100=SURFACE_OF_REVOLUTION('',#63,#95);",
+        );
+    let input = InputFile::new(
+        Some(std::path::Path::new("circle-revolution-torus-hole.step")),
+        fixture.as_bytes(),
+    );
+    let direct_input = InputFile::new(
+        Some(std::path::Path::new("circle-revolution-torus-hole.step")),
+        direct_step,
+    );
+    let options = ImportOptions {
+        max_lod_error: 0.05,
+        ..ImportOptions::default()
+    };
+
+    let document = ImporterRegistry::default()
+        .import(&input, &options)
+        .expect("CIRCLE SURFACE_OF_REVOLUTION should preserve an inner bound");
+    let direct = ImporterRegistry::default()
+        .import(&direct_input, &options)
+        .expect("native ring torus with an inner bound should remain importable");
+
+    validate_document(&document).expect("revolved torus with inner bound should validate");
+    assert_eq!(document, direct);
+    assert!(document.metadata.triangle_count > 2);
+}
+
+#[test]
+fn tessellates_ellipse_revolution_spheroid_and_exports_glb() {
+    let step = include_bytes!("../../../tests/fixtures/sample_ap214_revolution_spheroid_brep.step");
+    let input = InputFile::new(Some(std::path::Path::new("spheroid.step")), step);
+    let registry = ImporterRegistry::default();
+    let coarse = registry
+        .import(
+            &input,
+            &ImportOptions {
+                max_lod_error: 0.1,
+                ..ImportOptions::default()
+            },
+        )
+        .expect("principal-axis ELLIPSE SURFACE_OF_REVOLUTION should tessellate");
+
+    validate_document(&coarse).expect("ellipse-revolution spheroid should validate");
+    assert!(coarse.metadata.triangle_count > 2);
+    assert_eq!(coarse.meshes[0].bbox.min, [0.0, 0.0, 0.0]);
+    assert_eq!(coarse.meshes[0].bbox.max[0], 0.002);
+    assert_eq!(coarse.meshes[0].bbox.max[1], 0.002);
+    assert!(coarse.meshes[0].bbox.max[2] > 0.0007);
+
+    let fine = registry
+        .import(
+            &input,
+            &ImportOptions {
+                max_lod_error: 0.01,
+                ..ImportOptions::default()
+            },
+        )
+        .expect("smaller spheroid chord error should remain importable");
+    assert!(fine.metadata.triangle_count > coarse.metadata.triangle_count);
+
+    let glb = export_glb(&fine, &GlbExportOptions::default())
+        .expect("ellipse-revolution spheroid should export as GLB");
+    let validation = validate_glb_payload(&glb).expect("spheroid GLB should validate");
+    assert_eq!(validation.triangle_count, fine.triangle_count());
+}
+
+#[test]
+fn rejects_non_coplanar_circle_surface_of_revolution() {
+    let fixture = String::from_utf8(
+        include_bytes!("../../../tests/fixtures/sample_ap214_spherical_brep.step").to_vec(),
+    )
+    .expect("fixture should be UTF-8")
+    .replace(
+        "#100=SPHERICAL_SURFACE('',#50,1.);",
+        "#95=AXIS1_PLACEMENT('',#14,#31);\n#100=SURFACE_OF_REVOLUTION('',#61,#95);",
+    );
+    let input = InputFile::new(
+        Some(std::path::Path::new("non-coplanar-revolution.step")),
+        fixture.as_bytes(),
+    );
+
+    let error = ImporterRegistry::default()
+        .import(&input, &ImportOptions::default())
+        .expect_err("non-coplanar circle revolution must fail explicitly");
+    assert!(matches!(
+        error,
+        ImportError::TessellationUnsupported { ref reason, .. }
+            if reason.contains("must lie in the same plane")
+    ));
+}
+
+#[test]
+fn rejects_skew_line_surface_of_revolution() {
+    let fixture = String::from_utf8(
+        include_bytes!("../../../tests/fixtures/sample_ap214_linear_extrusion_plane_brep.step")
+            .to_vec(),
+    )
+    .expect("fixture should be UTF-8")
+    .replace(
+        "#90=SURFACE_OF_LINEAR_EXTRUSION('',#50,#41);",
+        "#14=CARTESIAN_POINT('',(0.,1.,0.));\n#32=DIRECTION('',(0.,0.,1.));\n#95=AXIS1_PLACEMENT('',#14,#32);\n#90=SURFACE_OF_REVOLUTION('',#50,#95);",
+    );
+    let input = InputFile::new(
+        Some(std::path::Path::new("skew-line-revolution.step")),
+        fixture.as_bytes(),
+    );
+
+    let error = ImporterRegistry::default()
+        .import(&input, &ImportOptions::default())
+        .expect_err("skew line revolution must not be treated as a plane or cone");
+    assert!(matches!(
+        error,
+        ImportError::TessellationUnsupported { ref reason, .. }
+            if reason.contains("axis and LINE swept curve must be coplanar")
+    ));
+}
+
+#[test]
+fn rejects_horn_circle_surface_of_revolution() {
+    let fixture = String::from_utf8(
+        include_bytes!("../../../tests/fixtures/sample_ap214_toroidal_brep.step").to_vec(),
+    )
+    .expect("fixture should be UTF-8")
+    .replace(
+        "#100=TOROIDAL_SURFACE('',#50,2.,1.);",
+        "#64=CIRCLE('',#53,2.);\n#95=AXIS1_PLACEMENT('',#14,#30);\n#100=SURFACE_OF_REVOLUTION('',#64,#95);",
+    );
+    let input = InputFile::new(
+        Some(std::path::Path::new("horn-revolution.step")),
+        fixture.as_bytes(),
+    );
+
+    let error = ImporterRegistry::default()
+        .import(&input, &ImportOptions::default())
+        .expect_err("horn circle revolution must fail explicitly");
+    assert!(matches!(
+        error,
+        ImportError::TessellationUnsupported { ref reason, .. }
+            if reason.contains("horn or spindle torus")
+    ));
+}
+
+#[test]
+fn rejects_offset_ellipse_surface_of_revolution() {
+    let fixture = String::from_utf8(
+        include_bytes!("../../../tests/fixtures/sample_ap214_revolution_spheroid_brep.step")
+            .to_vec(),
+    )
+    .expect("fixture should be UTF-8")
+    .replace(
+        "#95=AXIS1_PLACEMENT('',#14,#30);",
+        "#95=AXIS1_PLACEMENT('',#10,#30);",
+    );
+    let input = InputFile::new(
+        Some(std::path::Path::new("offset-ellipse-revolution.step")),
+        fixture.as_bytes(),
+    );
+
+    let error = ImporterRegistry::default()
+        .import(&input, &ImportOptions::default())
+        .expect_err("offset ellipse revolution must fail explicitly");
+    assert!(matches!(
+        error,
+        ImportError::TessellationUnsupported { ref reason, .. }
+            if reason.contains("axis to pass through the ellipse center")
+    ));
+}
+
+#[test]
+fn rejects_non_principal_axis_ellipse_surface_of_revolution() {
+    let fixture = String::from_utf8(
+        include_bytes!("../../../tests/fixtures/sample_ap214_revolution_spheroid_brep.step")
+            .to_vec(),
+    )
+    .expect("fixture should be UTF-8")
+    .replace(
+        "#33=DIRECTION('',(0.,-1.,0.));",
+        "#33=DIRECTION('',(0.,-1.,0.));\n#34=DIRECTION('',(1.,0.,1.));",
+    )
+    .replace(
+        "#95=AXIS1_PLACEMENT('',#14,#30);",
+        "#95=AXIS1_PLACEMENT('',#14,#34);",
+    );
+    let input = InputFile::new(
+        Some(std::path::Path::new(
+            "non-principal-ellipse-revolution.step",
+        )),
+        fixture.as_bytes(),
+    );
+
+    let error = ImporterRegistry::default()
+        .import(&input, &ImportOptions::default())
+        .expect_err("non-principal ellipse revolution must fail explicitly");
+    assert!(matches!(
+        error,
+        ImportError::TessellationUnsupported { ref reason, .. }
+            if reason.contains("axis must align with an ellipse principal axis")
+    ));
+}
+
+#[test]
 fn tessellates_spherical_step_face_with_circular_boundaries() {
     let step = include_bytes!("../../../tests/fixtures/sample_ap214_spherical_brep.step");
     let input = InputFile::new(Some(std::path::Path::new("sphere.step")), step);

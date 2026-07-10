@@ -2,7 +2,7 @@
 //!
 //! The importer resolves `ADVANCED_FACE` boundaries through `EDGE_LOOP` or
 //! `POLY_LOOP`, validates supported analytic curve geometry, and triangulates
-//! planar, cylindrical, conical, spherical, and ring-toroidal surfaces.
+//! planar, cylindrical, conical, spherical, spheroidal, and ring-toroidal surfaces.
 //! Outer and inner bounds are triangulated in a validated parameter domain;
 //! unsupported or invalid topology is rejected before any geometry is emitted.
 
@@ -29,6 +29,13 @@ struct AxisPlacement {
     axis: [f32; 3],
     x_axis: [f32; 3],
     y_axis: [f32; 3],
+}
+
+/// Origin and direction resolved from one STEP `AXIS1_PLACEMENT`.
+#[derive(Clone, Copy)]
+struct RevolutionAxis {
+    origin: [f32; 3],
+    direction: [f32; 3],
 }
 
 /// Analytic ellipse parameters resolved from one STEP `ELLIPSE`.
@@ -70,6 +77,14 @@ struct BsplineCurveGeometry {
 struct SphereGeometry {
     placement: AxisPlacement,
     radius: f32,
+}
+
+/// Analytic spheroid produced by rotating a centered ellipse about a principal axis.
+#[derive(Clone, Copy)]
+struct SpheroidGeometry {
+    placement: AxisPlacement,
+    equatorial_radius: f32,
+    polar_radius: f32,
 }
 
 /// Analytic ring-torus parameters resolved from one STEP `TOROIDAL_SURFACE`.
@@ -139,6 +154,32 @@ enum LinearExtrusionSurfaceGeometry {
     Plane { origin: [f32; 3], normal: [f32; 3] },
     Cylinder(RevolvedSurfaceGeometry),
     EllipticCylinder(EllipticCylinderGeometry),
+}
+
+/// Supported `SURFACE_OF_REVOLUTION` forms normalized to existing analytic solvers.
+#[derive(Clone, Copy)]
+enum SurfaceOfRevolutionGeometry {
+    Plane {
+        origin: [f32; 3],
+        normal: [f32; 3],
+        orientation_matches_native: bool,
+    },
+    Revolved {
+        geometry: RevolvedSurfaceGeometry,
+        orientation_matches_native: bool,
+    },
+    Sphere {
+        geometry: SphereGeometry,
+        orientation_matches_native: bool,
+    },
+    Spheroid {
+        geometry: SpheroidGeometry,
+        orientation_matches_native: bool,
+    },
+    Torus {
+        geometry: TorusGeometry,
+        orientation_matches_native: bool,
+    },
 }
 
 /// Faces owned by one reusable STEP solid, or one fallback ungrouped face set.
@@ -371,9 +412,16 @@ fn append_brep_face(
         "SURFACE_OF_LINEAR_EXTRUSION" => {
             tessellate_linear_extrusion_face(&boundaries, surface, same_sense, records, face.id)?
         }
+        "SURFACE_OF_REVOLUTION" => tessellate_surface_of_revolution_face(
+            &boundaries,
+            surface,
+            same_sense,
+            records,
+            face.id,
+        )?,
         kind => {
             return Err(unsupported(format!(
-                "#{} ADVANCED_FACE uses {kind} surface; supported surfaces are PLANE, CYLINDRICAL_SURFACE, CONICAL_SURFACE, SPHERICAL_SURFACE, TOROIDAL_SURFACE, and LINE/CIRCLE/ELLIPSE SURFACE_OF_LINEAR_EXTRUSION",
+                "#{} ADVANCED_FACE uses {kind} surface; supported surfaces are PLANE, CYLINDRICAL_SURFACE, CONICAL_SURFACE, SPHERICAL_SURFACE, TOROIDAL_SURFACE, LINE/CIRCLE/ELLIPSE SURFACE_OF_LINEAR_EXTRUSION, and supported LINE/CIRCLE/ELLIPSE SURFACE_OF_REVOLUTION forms",
                 face.id
             )));
         }
@@ -610,6 +658,72 @@ fn tessellate_linear_extrusion_face(
     }
 }
 
+fn tessellate_surface_of_revolution_face(
+    boundaries: &ResolvedFaceBoundaries,
+    surface: &StepRecord,
+    same_sense: bool,
+    records: &HashMap<usize, &StepRecord>,
+    face_id: usize,
+) -> Result<(Vec<u32>, Vec<[f32; 3]>), ImportError> {
+    match resolve_surface_of_revolution(surface, boundaries, records)? {
+        SurfaceOfRevolutionGeometry::Plane {
+            origin,
+            normal,
+            orientation_matches_native,
+        } => tessellate_planar_geometry(
+            boundaries,
+            origin,
+            normal,
+            same_sense == orientation_matches_native,
+            face_id,
+        ),
+        SurfaceOfRevolutionGeometry::Revolved {
+            geometry,
+            orientation_matches_native,
+        } => tessellate_revolved_geometry(
+            boundaries,
+            geometry,
+            same_sense == orientation_matches_native,
+            records,
+            surface.id,
+            face_id,
+        ),
+        SurfaceOfRevolutionGeometry::Sphere {
+            geometry,
+            orientation_matches_native,
+        } => tessellate_spherical_geometry(
+            boundaries,
+            geometry,
+            same_sense == orientation_matches_native,
+            records,
+            surface.id,
+            face_id,
+        ),
+        SurfaceOfRevolutionGeometry::Spheroid {
+            geometry,
+            orientation_matches_native,
+        } => tessellate_spheroidal_geometry(
+            boundaries,
+            geometry,
+            same_sense == orientation_matches_native,
+            records,
+            surface.id,
+            face_id,
+        ),
+        SurfaceOfRevolutionGeometry::Torus {
+            geometry,
+            orientation_matches_native,
+        } => tessellate_toroidal_geometry(
+            boundaries,
+            geometry,
+            same_sense == orientation_matches_native,
+            records,
+            surface.id,
+            face_id,
+        ),
+    }
+}
+
 fn tessellate_spherical_face(
     boundaries: &ResolvedFaceBoundaries,
     surface: &StepRecord,
@@ -618,6 +732,17 @@ fn tessellate_spherical_face(
     face_id: usize,
 ) -> Result<(Vec<u32>, Vec<[f32; 3]>), ImportError> {
     let sphere = resolve_sphere(surface, records)?;
+    tessellate_spherical_geometry(boundaries, sphere, same_sense, records, surface.id, face_id)
+}
+
+fn tessellate_spherical_geometry(
+    boundaries: &ResolvedFaceBoundaries,
+    sphere: SphereGeometry,
+    same_sense: bool,
+    records: &HashMap<usize, &StepRecord>,
+    surface_id: usize,
+    face_id: usize,
+) -> Result<(Vec<u32>, Vec<[f32; 3]>), ImportError> {
     let mut projected = Vec::with_capacity(boundaries.positions.len());
     let mut normals = Vec::with_capacity(boundaries.positions.len());
     let tolerance = geometry_tolerance(&boundaries.positions);
@@ -632,7 +757,7 @@ fn tessellate_spherical_face(
             if !radial_length.is_finite() || (radial_length - sphere.radius).abs() > tolerance {
                 return Err(ImportError::InvalidData(format!(
                     "#{face_id} ADVANCED_FACE boundary does not lie on SPHERICAL_SURFACE #{}",
-                    surface.id
+                    surface_id
                 )));
             }
             let x = dot3(offset, sphere.placement.x_axis);
@@ -671,6 +796,87 @@ fn tessellate_spherical_face(
         &mut indices,
         &boundaries.positions,
         sphere,
+        same_sense,
+        face_id,
+    )?;
+    Ok((indices, normals))
+}
+
+fn tessellate_spheroidal_geometry(
+    boundaries: &ResolvedFaceBoundaries,
+    spheroid: SpheroidGeometry,
+    same_sense: bool,
+    records: &HashMap<usize, &StepRecord>,
+    surface_id: usize,
+    face_id: usize,
+) -> Result<(Vec<u32>, Vec<[f32; 3]>), ImportError> {
+    let mut projected = Vec::with_capacity(boundaries.positions.len());
+    let mut normals = Vec::with_capacity(boundaries.positions.len());
+    let tolerance = geometry_tolerance(&boundaries.positions);
+
+    for (loop_index, boundary) in boundaries.loops.iter().enumerate() {
+        validate_spheroidal_loop_geometry(
+            boundary.loop_id,
+            spheroid,
+            records,
+            face_id,
+            surface_id,
+        )?;
+        let mut loop_projected = Vec::with_capacity(boundary.range.len());
+        let mut previous_longitude = None::<f32>;
+        for position in &boundaries.positions[boundary.range.clone()] {
+            let offset = sub3(*position, spheroid.placement.origin);
+            let x = dot3(offset, spheroid.placement.x_axis);
+            let y = dot3(offset, spheroid.placement.y_axis);
+            let z = dot3(offset, spheroid.placement.axis);
+            let horizontal = x.hypot(y);
+            let equation = (horizontal / spheroid.equatorial_radius).powi(2)
+                + (z / spheroid.polar_radius).powi(2);
+            if !equation.is_finite() || (equation - 1.0).abs() > 1.0e-4 {
+                return Err(ImportError::InvalidData(format!(
+                    "#{face_id} ADVANCED_FACE boundary does not lie on ELLIPSE SURFACE_OF_REVOLUTION #{surface_id}"
+                )));
+            }
+            if horizontal <= tolerance {
+                return Err(unsupported(format!(
+                    "#{face_id} ELLIPSE SURFACE_OF_REVOLUTION boundary touches a parameterization pole"
+                )));
+            }
+
+            let raw_longitude = y.atan2(x);
+            let longitude = unwrap_angle(previous_longitude, raw_longitude);
+            previous_longitude = Some(longitude);
+            let latitude =
+                (z / spheroid.polar_radius).atan2(horizontal / spheroid.equatorial_radius);
+            loop_projected.push([
+                longitude * spheroid.equatorial_radius,
+                latitude * spheroid.polar_radius,
+            ]);
+            let normal = spheroid_normal_at(*position, spheroid, face_id)?;
+            normals.push(if same_sense {
+                normal
+            } else {
+                scale3(normal, -1.0)
+            });
+        }
+        if loop_index > 0 {
+            align_periodic_loop(
+                &mut loop_projected,
+                &projected[boundaries.loops[0].range.clone()],
+                [
+                    Some(std::f32::consts::TAU * spheroid.equatorial_radius),
+                    None,
+                ],
+            );
+        }
+        projected.extend(loop_projected);
+    }
+
+    let mut indices = triangulate_projected_face(&projected, &boundaries.hole_indices(), face_id)?;
+    orient_spheroidal_triangles(
+        &mut indices,
+        &boundaries.positions,
+        spheroid,
         same_sense,
         face_id,
     )?;
@@ -746,6 +952,17 @@ fn tessellate_toroidal_face(
     face_id: usize,
 ) -> Result<(Vec<u32>, Vec<[f32; 3]>), ImportError> {
     let torus = resolve_torus(surface, records)?;
+    tessellate_toroidal_geometry(boundaries, torus, same_sense, records, surface.id, face_id)
+}
+
+fn tessellate_toroidal_geometry(
+    boundaries: &ResolvedFaceBoundaries,
+    torus: TorusGeometry,
+    same_sense: bool,
+    records: &HashMap<usize, &StepRecord>,
+    surface_id: usize,
+    face_id: usize,
+) -> Result<(Vec<u32>, Vec<[f32; 3]>), ImportError> {
     let mut projected = Vec::with_capacity(boundaries.positions.len());
     let mut normals = Vec::with_capacity(boundaries.positions.len());
     let tolerance = geometry_tolerance(&boundaries.positions);
@@ -771,7 +988,7 @@ fn tessellate_toroidal_face(
             if !tube_length.is_finite() || (tube_length - torus.minor_radius).abs() > tolerance {
                 return Err(ImportError::InvalidData(format!(
                     "#{face_id} ADVANCED_FACE boundary does not lie on TOROIDAL_SURFACE #{}",
-                    surface.id
+                    surface_id
                 )));
             }
 
@@ -2309,6 +2526,490 @@ fn resolve_plane(
     Ok((placement.origin, placement.axis))
 }
 
+fn resolve_surface_of_revolution(
+    surface: &StepRecord,
+    boundaries: &ResolvedFaceBoundaries,
+    records: &HashMap<usize, &StepRecord>,
+) -> Result<SurfaceOfRevolutionGeometry, ImportError> {
+    let args = require_args(surface, 3)?;
+    let swept_curve_id = parse_reference(args[1]).ok_or_else(|| {
+        ImportError::InvalidData(format!(
+            "#{} SURFACE_OF_REVOLUTION has no swept curve reference",
+            surface.id
+        ))
+    })?;
+    let axis_id = parse_reference(args[2]).ok_or_else(|| {
+        ImportError::InvalidData(format!(
+            "#{} SURFACE_OF_REVOLUTION has no axis placement reference",
+            surface.id
+        ))
+    })?;
+    let axis = resolve_revolution_axis(axis_id, records)?;
+    let swept_curve = require_record(records, swept_curve_id, "revolution swept curve")?;
+    match swept_curve.kind.as_str() {
+        "LINE" => normalize_line_revolution(surface.id, swept_curve, axis, boundaries, records),
+        "CIRCLE" => normalize_circle_revolution(surface.id, swept_curve, axis, boundaries, records),
+        "ELLIPSE" => {
+            normalize_ellipse_revolution(surface.id, swept_curve, axis, boundaries, records)
+        }
+        kind => Err(unsupported(format!(
+            "#{} SURFACE_OF_REVOLUTION sweeps unsupported curve {kind}; supported swept curves are LINE, CIRCLE, and centered principal-axis ELLIPSE",
+            surface.id
+        ))),
+    }
+}
+
+fn normalize_line_revolution(
+    surface_id: usize,
+    line: &StepRecord,
+    axis: RevolutionAxis,
+    boundaries: &ResolvedFaceBoundaries,
+    records: &HashMap<usize, &StepRecord>,
+) -> Result<SurfaceOfRevolutionGeometry, ImportError> {
+    let (line_origin, line_direction) = resolve_line_origin_and_direction(line, records)?;
+    let tolerance = geometry_tolerance(&boundaries.positions);
+    let axis_cross = cross3(axis.direction, line_direction);
+    let axis_cross_length = length3(axis_cross);
+    let origin_offset = sub3(line_origin, axis.origin);
+
+    if axis_cross_length <= 1.0e-5 {
+        let height = dot3(origin_offset, axis.direction);
+        let radial = sub3(origin_offset, scale3(axis.direction, height));
+        let reference_radius = length3(radial);
+        if !reference_radius.is_finite() || reference_radius <= tolerance {
+            return Err(unsupported(format!(
+                "#{surface_id} SURFACE_OF_REVOLUTION LINE is coincident with the revolution axis"
+            )));
+        }
+        let x_axis = scale3(radial, 1.0 / reference_radius);
+        let y_axis = normalize3(cross3(axis.direction, x_axis)).ok_or_else(|| {
+            ImportError::InvalidData(format!(
+                "#{surface_id} SURFACE_OF_REVOLUTION has an invalid cylindrical basis"
+            ))
+        })?;
+        let placement = AxisPlacement {
+            origin: add3(axis.origin, scale3(axis.direction, height)),
+            axis: axis.direction,
+            x_axis,
+            y_axis,
+        };
+        let geometry = RevolvedSurfaceGeometry {
+            placement,
+            reference_radius,
+            radial_slope: 0.0,
+            kind: RevolvedSurfaceKind::Cylinder,
+        };
+        let sample = line_origin;
+        let orientation_matches_native = revolution_orientation_matches_native(
+            axis,
+            sample,
+            line_direction,
+            radial,
+            surface_id,
+            "LINE cylinder",
+        )?;
+        return Ok(SurfaceOfRevolutionGeometry::Revolved {
+            geometry,
+            orientation_matches_native,
+        });
+    }
+
+    let plane_normal = scale3(axis_cross, 1.0 / axis_cross_length);
+    let axis_distance = dot3(origin_offset, plane_normal).abs();
+    if !axis_distance.is_finite() || axis_distance > tolerance {
+        return Err(unsupported(format!(
+            "#{surface_id} SURFACE_OF_REVOLUTION axis and LINE swept curve must be coplanar"
+        )));
+    }
+
+    let alignment = dot3(line_direction, axis.direction);
+    let denominator = 1.0 - alignment * alignment;
+    let line_parameter = (alignment * dot3(origin_offset, axis.direction)
+        - dot3(origin_offset, line_direction))
+        / denominator;
+    let line_axis_point = add3(line_origin, scale3(line_direction, line_parameter));
+    let axis_height = dot3(sub3(line_axis_point, axis.origin), axis.direction);
+    let axis_point = add3(axis.origin, scale3(axis.direction, axis_height));
+    if length3(sub3(line_axis_point, axis_point)) > tolerance {
+        return Err(unsupported(format!(
+            "#{surface_id} SURFACE_OF_REVOLUTION axis and LINE swept curve do not intersect"
+        )));
+    }
+
+    if alignment.abs() <= 1.0e-5 {
+        let sample = add3(axis_point, line_direction);
+        let orientation_matches_native = revolution_orientation_matches_native(
+            axis,
+            sample,
+            line_direction,
+            axis.direction,
+            surface_id,
+            "LINE plane",
+        )?;
+        return Ok(SurfaceOfRevolutionGeometry::Plane {
+            origin: axis_point,
+            normal: axis.direction,
+            orientation_matches_native,
+        });
+    }
+
+    let sample = first_position_away_from_axis(boundaries, axis, tolerance, surface_id)?;
+    let sample_offset = sub3(sample, axis_point);
+    let sample_height = dot3(sample_offset, axis.direction);
+    let sample_radial = sub3(sample_offset, scale3(axis.direction, sample_height));
+    let reference_radius = length3(sample_radial);
+    if sample_height.abs() <= tolerance || reference_radius <= tolerance {
+        return Err(unsupported(format!(
+            "#{surface_id} LINE SURFACE_OF_REVOLUTION boundary reaches the cone apex"
+        )));
+    }
+    let x_axis = scale3(sample_radial, 1.0 / reference_radius);
+    let y_axis = normalize3(cross3(axis.direction, x_axis)).ok_or_else(|| {
+        ImportError::InvalidData(format!(
+            "#{surface_id} SURFACE_OF_REVOLUTION has an invalid conical basis"
+        ))
+    })?;
+    let radial_slope = reference_radius / sample_height;
+    let geometry = RevolvedSurfaceGeometry {
+        placement: AxisPlacement {
+            origin: add3(axis_point, scale3(axis.direction, sample_height)),
+            axis: axis.direction,
+            x_axis,
+            y_axis,
+        },
+        reference_radius,
+        radial_slope,
+        kind: RevolvedSurfaceKind::Cone,
+    };
+    let native_normal =
+        normalize3(sub3(x_axis, scale3(axis.direction, radial_slope))).ok_or_else(|| {
+            ImportError::InvalidData(format!(
+                "#{surface_id} SURFACE_OF_REVOLUTION has an invalid cone normal"
+            ))
+        })?;
+    let rotated_curve_tangent = add3(
+        scale3(axis.direction, alignment),
+        scale3(x_axis, radial_slope * alignment),
+    );
+    let orientation_matches_native = revolution_orientation_matches_native(
+        axis,
+        sample,
+        rotated_curve_tangent,
+        native_normal,
+        surface_id,
+        "LINE cone",
+    )?;
+    Ok(SurfaceOfRevolutionGeometry::Revolved {
+        geometry,
+        orientation_matches_native,
+    })
+}
+
+fn normalize_circle_revolution(
+    surface_id: usize,
+    circle_record: &StepRecord,
+    axis: RevolutionAxis,
+    boundaries: &ResolvedFaceBoundaries,
+    records: &HashMap<usize, &StepRecord>,
+) -> Result<SurfaceOfRevolutionGeometry, ImportError> {
+    let circle = resolve_circle(circle_record, records)?;
+    let tolerance = geometry_tolerance(&boundaries.positions).max(circle.radius.max(1.0) * 1.0e-5);
+    validate_revolution_curve_plane(surface_id, axis, circle.placement, tolerance, "CIRCLE")?;
+    let center_offset = sub3(circle.placement.origin, axis.origin);
+    let center_height = dot3(center_offset, axis.direction);
+    let center_radial = sub3(center_offset, scale3(axis.direction, center_height));
+    let major_radius = length3(center_radial);
+    let (sample, tangent) = circle_revolution_sample(circle, axis, tolerance, surface_id)?;
+
+    if major_radius <= tolerance {
+        let x_axis =
+            normalize3(cross3(circle.placement.axis, axis.direction)).ok_or_else(|| {
+                ImportError::InvalidData(format!(
+                    "#{surface_id} CIRCLE SURFACE_OF_REVOLUTION has an invalid spherical basis"
+                ))
+            })?;
+        let y_axis = normalize3(cross3(axis.direction, x_axis)).ok_or_else(|| {
+            ImportError::InvalidData(format!(
+                "#{surface_id} CIRCLE SURFACE_OF_REVOLUTION has an invalid spherical basis"
+            ))
+        })?;
+        let geometry = SphereGeometry {
+            placement: AxisPlacement {
+                origin: circle.placement.origin,
+                axis: axis.direction,
+                x_axis,
+                y_axis,
+            },
+            radius: circle.radius,
+        };
+        let orientation_matches_native = revolution_orientation_matches_native(
+            axis,
+            sample,
+            tangent,
+            sub3(sample, geometry.placement.origin),
+            surface_id,
+            "CIRCLE sphere",
+        )?;
+        return Ok(SurfaceOfRevolutionGeometry::Sphere {
+            geometry,
+            orientation_matches_native,
+        });
+    }
+
+    if major_radius <= circle.radius + tolerance {
+        return Err(unsupported(format!(
+            "#{surface_id} CIRCLE SURFACE_OF_REVOLUTION produces a horn or spindle torus"
+        )));
+    }
+    let x_axis = scale3(center_radial, 1.0 / major_radius);
+    let y_axis = normalize3(cross3(axis.direction, x_axis)).ok_or_else(|| {
+        ImportError::InvalidData(format!(
+            "#{surface_id} CIRCLE SURFACE_OF_REVOLUTION has an invalid torus basis"
+        ))
+    })?;
+    let geometry = TorusGeometry {
+        placement: AxisPlacement {
+            origin: add3(axis.origin, scale3(axis.direction, center_height)),
+            axis: axis.direction,
+            x_axis,
+            y_axis,
+        },
+        major_radius,
+        minor_radius: circle.radius,
+    };
+    let native_normal = torus_normal_at(sample, geometry, surface_id)?;
+    let orientation_matches_native = revolution_orientation_matches_native(
+        axis,
+        sample,
+        tangent,
+        native_normal,
+        surface_id,
+        "CIRCLE torus",
+    )?;
+    Ok(SurfaceOfRevolutionGeometry::Torus {
+        geometry,
+        orientation_matches_native,
+    })
+}
+
+fn normalize_ellipse_revolution(
+    surface_id: usize,
+    ellipse_record: &StepRecord,
+    axis: RevolutionAxis,
+    boundaries: &ResolvedFaceBoundaries,
+    records: &HashMap<usize, &StepRecord>,
+) -> Result<SurfaceOfRevolutionGeometry, ImportError> {
+    let ellipse = resolve_ellipse(ellipse_record, records)?;
+    let tolerance =
+        geometry_tolerance(&boundaries.positions).max(ellipse.semi_axis_1.max(1.0) * 1.0e-5);
+    validate_revolution_curve_plane(surface_id, axis, ellipse.placement, tolerance, "ELLIPSE")?;
+    let center_radial = radial_from_axis(ellipse.placement.origin, axis);
+    if length3(center_radial) > tolerance {
+        return Err(unsupported(format!(
+            "#{surface_id} ELLIPSE SURFACE_OF_REVOLUTION requires the revolution axis to pass through the ellipse center"
+        )));
+    }
+
+    let x_alignment = dot3(axis.direction, ellipse.placement.x_axis).abs();
+    let y_alignment = dot3(axis.direction, ellipse.placement.y_axis).abs();
+    let (equatorial_direction, equatorial_radius, polar_radius, sample_angle) = if x_alignment
+        >= 1.0 - 1.0e-5
+    {
+        (
+            ellipse.placement.y_axis,
+            ellipse.semi_axis_2,
+            ellipse.semi_axis_1,
+            std::f32::consts::FRAC_PI_2,
+        )
+    } else if y_alignment >= 1.0 - 1.0e-5 {
+        (
+            ellipse.placement.x_axis,
+            ellipse.semi_axis_1,
+            ellipse.semi_axis_2,
+            0.0,
+        )
+    } else {
+        return Err(unsupported(format!(
+            "#{surface_id} ELLIPSE SURFACE_OF_REVOLUTION axis must align with an ellipse principal axis"
+        )));
+    };
+    let x_axis = normalize3(sub3(
+        equatorial_direction,
+        scale3(axis.direction, dot3(equatorial_direction, axis.direction)),
+    ))
+    .ok_or_else(|| {
+        ImportError::InvalidData(format!(
+            "#{surface_id} ELLIPSE SURFACE_OF_REVOLUTION has an invalid spheroidal basis"
+        ))
+    })?;
+    let y_axis = normalize3(cross3(axis.direction, x_axis)).ok_or_else(|| {
+        ImportError::InvalidData(format!(
+            "#{surface_id} ELLIPSE SURFACE_OF_REVOLUTION has an invalid spheroidal basis"
+        ))
+    })?;
+    let geometry = SpheroidGeometry {
+        placement: AxisPlacement {
+            origin: ellipse.placement.origin,
+            axis: axis.direction,
+            x_axis,
+            y_axis,
+        },
+        equatorial_radius,
+        polar_radius,
+    };
+    let sample = ellipse_point(ellipse, sample_angle);
+    let tangent = ellipse_tangent(ellipse, sample_angle);
+    let native_normal = spheroid_normal_at(sample, geometry, surface_id)?;
+    let orientation_matches_native = revolution_orientation_matches_native(
+        axis,
+        sample,
+        tangent,
+        native_normal,
+        surface_id,
+        "ELLIPSE spheroid",
+    )?;
+    Ok(SurfaceOfRevolutionGeometry::Spheroid {
+        geometry,
+        orientation_matches_native,
+    })
+}
+
+fn resolve_revolution_axis(
+    placement_id: usize,
+    records: &HashMap<usize, &StepRecord>,
+) -> Result<RevolutionAxis, ImportError> {
+    let placement = require_record(records, placement_id, "revolution axis placement")?;
+    if placement.kind != "AXIS1_PLACEMENT" {
+        return Err(ImportError::InvalidData(format!(
+            "#{placement_id} is {}, expected AXIS1_PLACEMENT",
+            placement.kind
+        )));
+    }
+    let args = require_args(placement, 2)?;
+    let origin_id = parse_reference(args[1]).ok_or_else(|| {
+        ImportError::InvalidData(format!("#{placement_id} AXIS1_PLACEMENT has no location"))
+    })?;
+    let direction = if args.get(2).is_none_or(|value| value.trim() == "$") {
+        [0.0, 0.0, 1.0]
+    } else {
+        let direction_id = parse_reference(args[2]).ok_or_else(|| {
+            ImportError::InvalidData(format!(
+                "#{placement_id} AXIS1_PLACEMENT has an invalid direction"
+            ))
+        })?;
+        resolve_direction(direction_id, records)?
+    };
+    Ok(RevolutionAxis {
+        origin: resolve_cartesian_point(origin_id, records)?,
+        direction,
+    })
+}
+
+fn validate_revolution_curve_plane(
+    surface_id: usize,
+    axis: RevolutionAxis,
+    curve_placement: AxisPlacement,
+    tolerance: f32,
+    curve_kind: &str,
+) -> Result<(), ImportError> {
+    let plane_distance = dot3(
+        sub3(axis.origin, curve_placement.origin),
+        curve_placement.axis,
+    )
+    .abs();
+    let direction_alignment = dot3(axis.direction, curve_placement.axis).abs();
+    if plane_distance > tolerance || direction_alignment > 1.0e-5 {
+        return Err(unsupported(format!(
+            "#{surface_id} SURFACE_OF_REVOLUTION axis and {curve_kind} swept curve must lie in the same plane"
+        )));
+    }
+    Ok(())
+}
+
+fn first_position_away_from_axis(
+    boundaries: &ResolvedFaceBoundaries,
+    axis: RevolutionAxis,
+    tolerance: f32,
+    surface_id: usize,
+) -> Result<[f32; 3], ImportError> {
+    boundaries
+        .positions
+        .iter()
+        .copied()
+        .find(|position| length3(radial_from_axis(*position, axis)) > tolerance)
+        .ok_or_else(|| {
+            unsupported(format!(
+                "#{surface_id} SURFACE_OF_REVOLUTION boundary lies on the revolution axis"
+            ))
+        })
+}
+
+fn radial_from_axis(position: [f32; 3], axis: RevolutionAxis) -> [f32; 3] {
+    let offset = sub3(position, axis.origin);
+    sub3(offset, scale3(axis.direction, dot3(offset, axis.direction)))
+}
+
+fn revolution_orientation_matches_native(
+    axis: RevolutionAxis,
+    position: [f32; 3],
+    curve_tangent: [f32; 3],
+    native_normal: [f32; 3],
+    surface_id: usize,
+    label: &str,
+) -> Result<bool, ImportError> {
+    let radial = radial_from_axis(position, axis);
+    let revolution_tangent = cross3(axis.direction, radial);
+    let natural_normal = cross3(revolution_tangent, curve_tangent);
+    let alignment = dot3(natural_normal, native_normal);
+    if !alignment.is_finite() || alignment.abs() <= GEOMETRY_EPSILON {
+        return Err(unsupported(format!(
+            "#{surface_id} SURFACE_OF_REVOLUTION {label} has a degenerate parameterization"
+        )));
+    }
+    Ok(alignment > 0.0)
+}
+
+fn circle_revolution_sample(
+    circle: CircleGeometry,
+    axis: RevolutionAxis,
+    tolerance: f32,
+    surface_id: usize,
+) -> Result<([f32; 3], [f32; 3]), ImportError> {
+    for angle in [
+        0.0,
+        std::f32::consts::FRAC_PI_2,
+        std::f32::consts::PI,
+        std::f32::consts::PI * 1.5,
+    ] {
+        let sample = circle_point(circle, angle);
+        let tangent = circle_tangent(circle, angle);
+        if length3(radial_from_axis(sample, axis)) > tolerance
+            && length3(cross3(axis.direction, radial_from_axis(sample, axis))) > tolerance
+        {
+            return Ok((sample, tangent));
+        }
+    }
+    Err(unsupported(format!(
+        "#{surface_id} CIRCLE SURFACE_OF_REVOLUTION has no regular parameter sample"
+    )))
+}
+
+fn circle_tangent(circle: CircleGeometry, angle: f32) -> [f32; 3] {
+    let (sin, cos) = stable_sin_cos(angle);
+    add3(
+        scale3(circle.placement.x_axis, -circle.radius * sin),
+        scale3(circle.placement.y_axis, circle.radius * cos),
+    )
+}
+
+fn ellipse_tangent(ellipse: EllipseGeometry, angle: f32) -> [f32; 3] {
+    let (sin, cos) = stable_sin_cos(angle);
+    add3(
+        scale3(ellipse.placement.x_axis, -ellipse.semi_axis_1 * sin),
+        scale3(ellipse.placement.y_axis, ellipse.semi_axis_2 * cos),
+    )
+}
+
 fn resolve_linear_extrusion_surface(
     surface: &StepRecord,
     records: &HashMap<usize, &StepRecord>,
@@ -2635,6 +3336,140 @@ fn validate_spherical_circle_edge(
         )));
     }
     Ok(())
+}
+
+fn validate_spheroidal_loop_geometry(
+    loop_id: usize,
+    spheroid: SpheroidGeometry,
+    records: &HashMap<usize, &StepRecord>,
+    face_id: usize,
+    surface_id: usize,
+) -> Result<(), ImportError> {
+    let loop_record = require_record(records, loop_id, "spheroidal face loop")?;
+    if loop_record.kind != "EDGE_LOOP" {
+        return Err(unsupported(format!(
+            "#{face_id} ELLIPSE SURFACE_OF_REVOLUTION requires EDGE_LOOP topology with supported curve edges"
+        )));
+    }
+    for resolved in resolve_loop_edge_geometries(loop_record, records, "spheroidal edge")? {
+        match resolved.geometry.kind.as_str() {
+            "CIRCLE" => validate_spheroidal_circle_edge(
+                resolved.edge.id,
+                resolved.geometry,
+                spheroid,
+                records,
+                surface_id,
+            )?,
+            "ELLIPSE" => validate_spheroidal_ellipse_edge(
+                resolved.edge.id,
+                resolved.geometry,
+                spheroid,
+                records,
+                surface_id,
+            )?,
+            _ if is_bspline_curve_with_knots(resolved.geometry) => {
+                // Every adaptive B-Spline sample is checked against the
+                // spheroid equation during parameter projection.
+            }
+            kind => {
+                return Err(unsupported(format!(
+                    "#{} ELLIPSE SURFACE_OF_REVOLUTION boundary uses unsupported edge geometry {kind}",
+                    resolved.edge.id
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_spheroidal_circle_edge(
+    edge_id: usize,
+    circle_record: &StepRecord,
+    spheroid: SpheroidGeometry,
+    records: &HashMap<usize, &StepRecord>,
+    surface_id: usize,
+) -> Result<(), ImportError> {
+    let circle = resolve_circle(circle_record, records)?;
+    let center_offset = sub3(circle.placement.origin, spheroid.placement.origin);
+    let height = dot3(center_offset, spheroid.placement.axis);
+    let center_radial = sub3(center_offset, scale3(spheroid.placement.axis, height));
+    let normalized_height = height / spheroid.polar_radius;
+    let expected_radius = spheroid.equatorial_radius
+        * (1.0 - normalized_height * normalized_height)
+            .max(0.0)
+            .sqrt();
+    let tolerance = spheroid
+        .equatorial_radius
+        .max(spheroid.polar_radius)
+        .max(circle.radius)
+        .max(1.0)
+        * 1.0e-5;
+    if length3(center_radial) > tolerance
+        || dot3(circle.placement.axis, spheroid.placement.axis).abs() < 1.0 - 1.0e-5
+        || normalized_height.abs() >= 1.0
+        || (circle.radius - expected_radius).abs() > tolerance
+    {
+        return Err(ImportError::InvalidData(format!(
+            "#{edge_id} CIRCLE boundary does not lie on ELLIPSE SURFACE_OF_REVOLUTION #{surface_id}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_spheroidal_ellipse_edge(
+    edge_id: usize,
+    ellipse_record: &StepRecord,
+    spheroid: SpheroidGeometry,
+    records: &HashMap<usize, &StepRecord>,
+    surface_id: usize,
+) -> Result<(), ImportError> {
+    let ellipse = resolve_ellipse(ellipse_record, records)?;
+    let center_distance = length3(sub3(ellipse.placement.origin, spheroid.placement.origin));
+    let x_axis_alignment = dot3(ellipse.placement.x_axis, spheroid.placement.axis).abs();
+    let y_axis_alignment = dot3(ellipse.placement.y_axis, spheroid.placement.axis).abs();
+    let tolerance = spheroid
+        .equatorial_radius
+        .max(spheroid.polar_radius)
+        .max(ellipse.semi_axis_1)
+        .max(1.0)
+        * 1.0e-5;
+    let x_is_polar = x_axis_alignment >= 1.0 - 1.0e-5
+        && (ellipse.semi_axis_1 - spheroid.polar_radius).abs() <= tolerance
+        && (ellipse.semi_axis_2 - spheroid.equatorial_radius).abs() <= tolerance;
+    let y_is_polar = y_axis_alignment >= 1.0 - 1.0e-5
+        && (ellipse.semi_axis_2 - spheroid.polar_radius).abs() <= tolerance
+        && (ellipse.semi_axis_1 - spheroid.equatorial_radius).abs() <= tolerance;
+    if center_distance > tolerance
+        || dot3(ellipse.placement.axis, spheroid.placement.axis).abs() > 1.0e-5
+        || (!x_is_polar && !y_is_polar)
+    {
+        return Err(ImportError::InvalidData(format!(
+            "#{edge_id} ELLIPSE boundary is not a meridian of ELLIPSE SURFACE_OF_REVOLUTION #{surface_id}"
+        )));
+    }
+    Ok(())
+}
+
+fn spheroid_normal_at(
+    position: [f32; 3],
+    spheroid: SpheroidGeometry,
+    context_id: usize,
+) -> Result<[f32; 3], ImportError> {
+    let offset = sub3(position, spheroid.placement.origin);
+    let height = dot3(offset, spheroid.placement.axis);
+    let radial = sub3(offset, scale3(spheroid.placement.axis, height));
+    normalize3(add3(
+        scale3(radial, 1.0 / spheroid.equatorial_radius.powi(2)),
+        scale3(
+            spheroid.placement.axis,
+            height / spheroid.polar_radius.powi(2),
+        ),
+    ))
+    .ok_or_else(|| {
+        ImportError::InvalidData(format!(
+            "#{context_id} ELLIPSE SURFACE_OF_REVOLUTION has an invalid surface normal"
+        ))
+    })
 }
 
 /// Resolves and validates the radii of a non-singular ring torus.
@@ -3513,11 +4348,10 @@ fn orient_spherical_triangles(
     Ok(())
 }
 
-/// Orients torus triangles against the outward tube normal at each triangle center.
-fn orient_toroidal_triangles(
+fn orient_spheroidal_triangles(
     indices: &mut [u32],
     positions: &[[f32; 3]],
-    torus: TorusGeometry,
+    spheroid: SpheroidGeometry,
     same_sense: bool,
     face_id: usize,
 ) -> Result<(), ImportError> {
@@ -3527,26 +4361,14 @@ fn orient_toroidal_triangles(
         let c = positions[triangle[2] as usize];
         let triangle_normal = cross3(sub3(b, a), sub3(c, a));
         let center = scale3(add3(add3(a, b), c), 1.0 / 3.0);
-        let offset = sub3(center, torus.placement.origin);
-        let height = dot3(offset, torus.placement.axis);
-        let radial = sub3(offset, scale3(torus.placement.axis, height));
-        let radial_direction = normalize3(radial).ok_or_else(|| {
-            ImportError::InvalidData(format!(
-                "#{face_id} TOROIDAL_SURFACE triangle center lies on the surface axis"
-            ))
-        })?;
-        let centerline = add3(
-            torus.placement.origin,
-            scale3(radial_direction, torus.major_radius),
-        );
-        let mut desired = sub3(center, centerline);
+        let mut desired = spheroid_normal_at(center, spheroid, face_id)?;
         if !same_sense {
             desired = scale3(desired, -1.0);
         }
         let alignment = dot3(triangle_normal, desired);
         if !alignment.is_finite() || alignment.abs() <= GEOMETRY_EPSILON {
             return Err(ImportError::InvalidData(format!(
-                "#{face_id} TOROIDAL_SURFACE produced a degenerate triangle"
+                "#{face_id} ELLIPSE SURFACE_OF_REVOLUTION produced a degenerate triangle"
             )));
         }
         if alignment < 0.0 {
@@ -3554,6 +4376,85 @@ fn orient_toroidal_triangles(
         }
     }
     Ok(())
+}
+
+/// Chooses one winding for a torus face from its most reliable surface-normal sample.
+fn orient_toroidal_triangles(
+    indices: &mut [u32],
+    positions: &[[f32; 3]],
+    torus: TorusGeometry,
+    same_sense: bool,
+    face_id: usize,
+) -> Result<(), ImportError> {
+    let mut strongest_alignment = 0.0_f32;
+    let mut reverse_winding = false;
+    for triangle in indices.chunks_exact(3) {
+        let a = positions[triangle[0] as usize];
+        let b = positions[triangle[1] as usize];
+        let c = positions[triangle[2] as usize];
+        let triangle_normal = cross3(sub3(b, a), sub3(c, a));
+        let triangle_area = length3(triangle_normal);
+        if !triangle_area.is_finite() || triangle_area <= GEOMETRY_EPSILON {
+            return Err(ImportError::InvalidData(format!(
+                "#{face_id} TOROIDAL_SURFACE produced a geometrically degenerate triangle"
+            )));
+        }
+        let mut desired = normalize3(add3(
+            add3(
+                torus_normal_at(a, torus, face_id)?,
+                torus_normal_at(b, torus, face_id)?,
+            ),
+            torus_normal_at(c, torus, face_id)?,
+        ))
+        .ok_or_else(|| {
+            ImportError::InvalidData(format!(
+                "#{face_id} TOROIDAL_SURFACE triangle has an invalid averaged normal"
+            ))
+        })?;
+        if !same_sense {
+            desired = scale3(desired, -1.0);
+        }
+        let alignment = dot3(triangle_normal, desired);
+        if alignment.is_finite() && alignment.abs() > strongest_alignment {
+            strongest_alignment = alignment.abs();
+            reverse_winding = alignment < 0.0;
+        }
+    }
+    if strongest_alignment <= GEOMETRY_EPSILON {
+        return Err(ImportError::InvalidData(format!(
+            "#{face_id} TOROIDAL_SURFACE produced no orientable triangles"
+        )));
+    }
+    if reverse_winding {
+        for triangle in indices.chunks_exact_mut(3) {
+            triangle.swap(1, 2);
+        }
+    }
+    Ok(())
+}
+
+fn torus_normal_at(
+    position: [f32; 3],
+    torus: TorusGeometry,
+    context_id: usize,
+) -> Result<[f32; 3], ImportError> {
+    let offset = sub3(position, torus.placement.origin);
+    let height = dot3(offset, torus.placement.axis);
+    let radial = sub3(offset, scale3(torus.placement.axis, height));
+    let radial_direction = normalize3(radial).ok_or_else(|| {
+        ImportError::InvalidData(format!(
+            "#{context_id} TOROIDAL_SURFACE point lies on the surface axis"
+        ))
+    })?;
+    let centerline = add3(
+        torus.placement.origin,
+        scale3(radial_direction, torus.major_radius),
+    );
+    normalize3(sub3(position, centerline)).ok_or_else(|| {
+        ImportError::InvalidData(format!(
+            "#{context_id} TOROIDAL_SURFACE has an invalid surface normal"
+        ))
+    })
 }
 
 fn project_polygon(positions: &[[f32; 3]], normal: [f32; 3]) -> Vec<[f32; 2]> {

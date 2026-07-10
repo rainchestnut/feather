@@ -50,9 +50,14 @@ adaptive `LINE`/`CIRCLE`/`ELLIPSE` boundaries (including single-edge closed
 conics), `PLANE`/`CYLINDRICAL_SURFACE`/`CONICAL_SURFACE`/`SPHERICAL_SURFACE` and regular ring
 `TOROIDAL_SURFACE`, closed shells, concave polygons, face orientation, and
 presentation colors is tessellated through the built-in open-source path.
+`SURFACE_OF_LINEAR_EXTRUSION` over line, circle, and ellipse curves is
+normalized to plane, cylinder, or elliptic-cylinder tessellation.
+`SURFACE_OF_REVOLUTION` over line, circle, and centered principal-axis ellipse
+curves is normalized to plane, cylinder, cone, sphere, regular ring torus, or
+spheroid tessellation while preserving the swept curve's parameter direction.
 `TRIMMED_CURVE` spans over `LINE`/`CIRCLE`/`ELLIPSE` basis curves are accepted
-with parameter trims. Planar faces also accept complete rational or
-non-rational `B_SPLINE_CURVE_WITH_KNOTS` edge boundaries and parameter
+with parameter trims. Supported analytic faces also accept complete rational
+or non-rational `B_SPLINE_CURVE_WITH_KNOTS` edge boundaries and parameter
 `TRIMMED_CURVE` spans over B-Spline basis, sampled with bounded de Boor
 evaluation and the same constrained triangulation path.
 Toroidal faces accept meridian and parallel circular boundaries and unwrap both
@@ -63,10 +68,11 @@ intersecting, touching, outside, overlapping, or nested loops are rejected.
 Explicit SI and conversion-based length and plane-angle units (including
 millimetres, inches, radians, and degrees) are resolved structurally;
 coordinates are normalized to metres for GLB. Cartesian-only trimmed curves,
-trimmed curves over unsupported bases, B-spline boundaries on non-planar
-surfaces, other curve families, spline surfaces, horn/spindle tori,
-non-meridian/non-parallel torus circles, cone faces reaching the apex, sphere
-faces touching parameterization poles, and non-rigid or
+trimmed curves over unsupported bases, B-spline boundaries on unsupported or
+singular surfaces, swept surfaces over unsupported, skew, non-coplanar,
+offset, or non-principal-axis curves, other curve families, spline surfaces,
+horn/spindle tori, non-meridian/non-parallel torus circles, cone faces reaching
+the apex, sphere or spheroid faces touching parameterization poles, and non-rigid or
 non-`ITEM_DEFINED_TRANSFORMATION` assembly transforms remain explicitly
 unsupported. AP214/AP242 shape-representation assembly
 relationships are preserved as reusable mesh instances with hierarchy and

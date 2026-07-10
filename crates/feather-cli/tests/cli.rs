@@ -60,9 +60,14 @@ fn formats_lists_real_support_contract() {
     assert!(stdout.contains("proprietary assembly references and transforms are detected"));
     assert!(stdout.contains("B_SPLINE_CURVE_WITH_KNOTS boundaries"));
     assert!(stdout.contains("parameter TRIMMED_CURVE spans"));
+    assert!(
+        stdout.contains(
+            "LINE/CIRCLE/centered principal-axis ELLIPSE SURFACE_OF_REVOLUTION normalized"
+        )
+    );
     assert!(stdout.contains("Cartesian-only trimmed curves"));
     assert!(stdout.contains("cone faces reaching or crossing the apex"));
-    assert!(stdout.contains("sphere faces touching parameterization poles"));
+    assert!(stdout.contains("sphere or spheroid faces touching parameterization poles"));
     assert!(stdout.contains("bounded outer/inner loops"));
     assert!(stdout.contains("shape-representation assembly hierarchy"));
     assert!(stdout.contains("ITEM_DEFINED_TRANSFORMATION"));

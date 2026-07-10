@@ -78,7 +78,7 @@ impl CadLiteImporter for StepLiteImporter {
 
         Err(ImportError::TessellationUnsupported {
             format: label.to_string(),
-            reason: "native AP242 tessellated faces, ADVANCED_FACE B-Rep with bounded outer/inner LINE/CIRCLE/ELLIPSE loops and parameter TRIMMED_CURVE spans on supported analytic surfaces, LINE/CIRCLE/ELLIPSE SURFACE_OF_LINEAR_EXTRUSION, rational or non-rational B_SPLINE_CURVE_WITH_KNOTS boundaries and parameter TRIMMED_CURVE spans on supported analytic faces, regular ring TOROIDAL_SURFACE with meridian/parallel circles, and rigid ITEM_DEFINED_TRANSFORMATION shape-representation assemblies are supported; other analytic or spline geometry, singular surfaces, and other assembly transforms are pending".to_string(),
+            reason: "native AP242 tessellated faces, ADVANCED_FACE B-Rep with bounded outer/inner LINE/CIRCLE/ELLIPSE loops and parameter TRIMMED_CURVE spans on supported analytic surfaces, LINE/CIRCLE/ELLIPSE SURFACE_OF_LINEAR_EXTRUSION, LINE/CIRCLE/centered principal-axis ELLIPSE SURFACE_OF_REVOLUTION normalized to regular analytic surfaces, rational or non-rational B_SPLINE_CURVE_WITH_KNOTS boundaries and parameter TRIMMED_CURVE spans on supported analytic faces, regular ring TOROIDAL_SURFACE with meridian/parallel circles, and rigid ITEM_DEFINED_TRANSFORMATION shape-representation assemblies are supported; other swept curves, spline surfaces, singular surfaces, and other assembly transforms are pending".to_string(),
         })
     }
 }
