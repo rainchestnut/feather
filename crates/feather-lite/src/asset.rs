@@ -18,7 +18,12 @@ use crate::batch::{
     BatchConversionError, BatchConversionOptions, BatchItem, BatchItemStatus, BatchReport,
     batch_output_file_name, collect_batch_input_paths, run_batch_conversion, run_batch_item,
 };
-use crate::contracts::{ASSET_PACKAGE_CONTRACT_VERSION, BATCH_MANIFEST_CONTRACT_VERSION};
+use crate::contracts::{
+    ASSET_BUSINESS_STATUS_CONTRACT_VERSION, ASSET_PACKAGE_AUDIT_CONTRACT_VERSION,
+    ASSET_PACKAGE_CONTRACT_VERSION, ASSET_PACKAGE_SUMMARY_CONTRACT_VERSION,
+    ASSET_PREFLIGHT_CONTRACT_VERSION, BATCH_ASSET_PREFLIGHT_CONTRACT_VERSION,
+    BATCH_MANIFEST_CONTRACT_VERSION,
+};
 use crate::diagnostics::batch_failure_category;
 use crate::importer::{ImportLimits, ImportOptions, ReferencePathMapping};
 use crate::inspect::{InspectError, InspectOptions, inspect_path};
@@ -203,7 +208,11 @@ impl BatchAssetPreflightResult {
 
     /// Serializes the batch preflight result to the stable business JSON shape.
     pub fn to_json_string(&self) -> String {
-        to_pretty_json(self, "batch asset preflight result")
+        to_versioned_pretty_json(
+            self,
+            BATCH_ASSET_PREFLIGHT_CONTRACT_VERSION,
+            "batch asset preflight result",
+        )
     }
 }
 
@@ -469,7 +478,11 @@ impl AssetBusinessStatus {
 
     /// Serializes this status to the stable business JSON shape.
     pub fn to_json_string(&self) -> String {
-        to_pretty_json(self, "asset business status")
+        to_versioned_pretty_json(
+            self,
+            ASSET_BUSINESS_STATUS_CONTRACT_VERSION,
+            "asset business status",
+        )
     }
 }
 
@@ -552,7 +565,11 @@ impl AssetPackageAudit {
 
     /// Serializes this package audit to the stable business JSON shape.
     pub fn to_json_string(&self) -> String {
-        to_pretty_json(self, "asset package audit")
+        to_versioned_pretty_json(
+            self,
+            ASSET_PACKAGE_AUDIT_CONTRACT_VERSION,
+            "asset package audit",
+        )
     }
 
     fn missing(package: AssetOutputPackage, reason: AssetPackageFreshnessReason) -> Self {
@@ -614,7 +631,11 @@ impl AssetPackageSummary {
 
     /// Serializes this package summary to the stable business JSON shape.
     pub fn to_json_string(&self) -> String {
-        to_pretty_json(self, "asset package summary")
+        to_versioned_pretty_json(
+            self,
+            ASSET_PACKAGE_SUMMARY_CONTRACT_VERSION,
+            "asset package summary",
+        )
     }
 }
 
@@ -816,7 +837,11 @@ impl AssetPreflightResult {
 
     /// Serializes this preflight result to the stable business JSON shape.
     pub fn to_json_string(&self) -> String {
-        to_pretty_json(self, "asset preflight result")
+        to_versioned_pretty_json(
+            self,
+            ASSET_PREFLIGHT_CONTRACT_VERSION,
+            "asset preflight result",
+        )
     }
 }
 
@@ -2504,9 +2529,22 @@ fn needs_action_status(input: NeedsActionStatusInput) -> AssetBusinessStatus {
     }
 }
 
-fn to_pretty_json(value: &impl Serialize, label: &str) -> String {
-    let mut json = serde_json::to_string_pretty(value)
+fn to_versioned_pretty_json(
+    value: &impl Serialize,
+    contract_version: &'static str,
+    label: &str,
+) -> String {
+    let mut value = serde_json::to_value(value)
         .unwrap_or_else(|error| panic!("{label} JSON serialization should work: {error}"));
+    value
+        .as_object_mut()
+        .unwrap_or_else(|| panic!("{label} JSON serialization should produce an object"))
+        .insert(
+            "contract_version".to_string(),
+            serde_json::Value::String(contract_version.to_string()),
+        );
+    let mut json = serde_json::to_string_pretty(&value)
+        .unwrap_or_else(|error| panic!("{label} JSON formatting should work: {error}"));
     json.push('\n');
     json
 }

@@ -357,3 +357,110 @@ Stable `failure_action` values are `provide_readable_visualization`,
 `increase_resource_limits`, `use_supported_input`, `repair_source_data`,
 `complete_source_package`, `check_storage_access`, `fix_export_pipeline`,
 `review_batch_failures`, and `inspect_failure`.
+
+## `feather.asset-business-status.v1`
+
+Emitted by:
+
+- `AssetBusinessStatus::to_json_string`
+
+Required fields:
+
+- `contract_version`: always `feather.asset-business-status.v1`
+- `state`: `ready_to_convert`, `converted`, `preview_ready`, or
+  `needs_action`
+- `previewable`: boolean
+- `package_usable`: boolean
+- `input_count`, `ready_count`, `blocked_count`: integer counts
+- `preview_status`: `ready`, `no_visual_geometry`, `no_preview_output`,
+  `partial_failure`, or `null`
+- `quality_level`: `empty`, `light`, `medium`, `heavy`, `oversized`, or
+  `null`
+- `decision`: asset preflight decision label or `null`
+- `action`: recommended failure action label or `null`
+- `reason`: package freshness reason label or `null`
+
+## `feather.asset-preflight.v1`
+
+Emitted by:
+
+- `AssetPreflightResult::to_json_string`
+
+Required fields:
+
+- `contract_version`: always `feather.asset-preflight.v1`
+- `decision`: asset preflight decision label
+- `source_format`: detected source format label
+- `capability_status`: capability status label or `null`
+- `visual_asset_count`: integer
+- `importable`: boolean
+- `required_condition`: actionable condition string or `null`
+- `quality`: business quality object or `null`
+- `node_count`, `mesh_count`, `primitive_count`, `vertex_count`,
+  `triangle_count`: integer counts or `null`
+- `failure`: failure object or `null`
+
+## `feather.batch-asset-preflight.v1`
+
+Emitted by:
+
+- `BatchAssetPreflightResult::to_json_string`
+
+Required fields:
+
+- `contract_version`: always `feather.batch-asset-preflight.v1`
+- `decision`: aggregate preflight decision label
+- `action`: recommended failure action label or `null`
+- `input_count`, `ready_count`, `blocked_count`: integer counts
+- `items`: array of preflight item objects
+
+Each item includes:
+
+- `input_path`: source path
+- `result`: an `AssetPreflightResult` object without its own top-level
+  `contract_version`
+
+## `feather.asset-package-audit.v1`
+
+Emitted by:
+
+- `AssetPackageAudit::to_json_string`
+
+Required fields:
+
+- `contract_version`: always `feather.asset-package-audit.v1`
+- `package`: reserved package paths
+- `usable`: boolean
+- `reason`: package freshness reason label
+- `kind`: `conversion`, `batch_conversion`, or `null`
+- `profile`: business profile label or `null`
+- `status`: `succeeded`, `failed`, or `null`
+- `identity`: asset identity object or `null`
+- `input_count`: integer
+- `quality`: business quality object or `null`
+- `failure`: failure object or `null`
+
+## `feather.asset-package-summary.v1`
+
+Emitted by:
+
+- `AssetPackageSummary::to_json_string`
+
+Required fields:
+
+- `contract_version`: always `feather.asset-package-summary.v1`
+- `audit`: package audit object without its own top-level `contract_version`
+- `items`: array of package summary items
+- `output_size_bytes`, `metadata_size_bytes`: aggregate byte counts
+
+Each item includes output paths, sidecar paths, operation, source format,
+geometry counts, artifact sizes, and optional `metadata`.
+
+When present, item `metadata` includes source format, conversion mode,
+precision, geometry counts, B-Rep flags, `bbox`, `source_path`, `warnings`,
+and append-only conversion sidecar details such as:
+
+- `source_units`: source length and plane-angle unit summaries, or `null`
+- `scene_summary`: root names, hierarchy counts, unique part counts, part
+  instance counts, reused part counts, and scene depth, or `null`
+- `mesh_instance_count` and `scene_depth`: integer counts or `null`

@@ -20,3 +20,18 @@ pub const JOB_RECORD_CONTRACT_VERSION: &str = "feather.job-record.v1";
 
 /// Contract version emitted by business asset package metadata and diagnostics.
 pub const ASSET_PACKAGE_CONTRACT_VERSION: &str = "feather.asset-package.v1";
+
+/// Contract version emitted by `AssetBusinessStatus::to_json_string`.
+pub const ASSET_BUSINESS_STATUS_CONTRACT_VERSION: &str = "feather.asset-business-status.v1";
+
+/// Contract version emitted by `AssetPreflightResult::to_json_string`.
+pub const ASSET_PREFLIGHT_CONTRACT_VERSION: &str = "feather.asset-preflight.v1";
+
+/// Contract version emitted by `BatchAssetPreflightResult::to_json_string`.
+pub const BATCH_ASSET_PREFLIGHT_CONTRACT_VERSION: &str = "feather.batch-asset-preflight.v1";
+
+/// Contract version emitted by `AssetPackageAudit::to_json_string`.
+pub const ASSET_PACKAGE_AUDIT_CONTRACT_VERSION: &str = "feather.asset-package-audit.v1";
+
+/// Contract version emitted by `AssetPackageSummary::to_json_string`.
+pub const ASSET_PACKAGE_SUMMARY_CONTRACT_VERSION: &str = "feather.asset-package-summary.v1";

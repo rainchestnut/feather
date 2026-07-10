@@ -2,16 +2,19 @@ use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use feather_lite::{
-    ASSET_PACKAGE_CONTRACT_VERSION, AssetBusinessState, AssetConversionError,
+    ASSET_BUSINESS_STATUS_CONTRACT_VERSION, ASSET_PACKAGE_AUDIT_CONTRACT_VERSION,
+    ASSET_PACKAGE_CONTRACT_VERSION, ASSET_PACKAGE_SUMMARY_CONTRACT_VERSION,
+    ASSET_PREFLIGHT_CONTRACT_VERSION, AssetBusinessState, AssetConversionError,
     AssetConversionProfile, AssetConversionRequest, AssetFailure, AssetFailureAction,
     AssetPackageFreshnessReason, AssetPackageStatus, AssetPackageSummaryOperation,
     AssetPreflightDecision, AssetPreflightRequest, AssetPreviewStatus, AssetQualityLevel,
-    BatchAssetConversionRequest, BatchItemStatus, JobConversionSettings, asset_conversion_identity,
-    batch_asset_conversion_identity, convert_asset, convert_batch_assets, ensure_asset_package,
-    ensure_batch_asset_package, explain_asset_package_freshness,
-    explain_batch_asset_package_freshness, inspect_asset_package, is_asset_package_current,
-    is_batch_asset_package_current, load_current_asset_package, load_current_batch_asset_package,
-    preflight_asset, preflight_batch_assets, read_asset_package_summary,
+    BATCH_ASSET_PREFLIGHT_CONTRACT_VERSION, BatchAssetConversionRequest, BatchItemStatus,
+    JobConversionSettings, asset_conversion_identity, batch_asset_conversion_identity,
+    convert_asset, convert_batch_assets, ensure_asset_package, ensure_batch_asset_package,
+    explain_asset_package_freshness, explain_batch_asset_package_freshness, inspect_asset_package,
+    is_asset_package_current, is_batch_asset_package_current, load_current_asset_package,
+    load_current_batch_asset_package, preflight_asset, preflight_batch_assets,
+    read_asset_package_summary,
 };
 
 const SAMPLE_CACHE: &str = "\
@@ -57,6 +60,10 @@ fn convert_asset_writes_standard_business_package() {
     assert!(business_status.previewable);
     assert!(business_status.package_usable);
     let business_status_json = parse_json(&business_status.to_json_string());
+    assert_eq!(
+        business_status_json["contract_version"],
+        ASSET_BUSINESS_STATUS_CONTRACT_VERSION
+    );
     assert_eq!(business_status_json["state"], "preview_ready");
     assert_eq!(business_status_json["previewable"], true);
     assert_eq!(business_status_json["package_usable"], true);
@@ -316,6 +323,10 @@ fn inspect_asset_package_audits_single_package_without_request() {
     assert!(audit_status.preview_ready());
     let audit_json = parse_json(&audit.to_json_string());
     assert_eq!(audit_json["usable"], true);
+    assert_eq!(
+        audit_json["contract_version"],
+        ASSET_PACKAGE_AUDIT_CONTRACT_VERSION
+    );
     assert_eq!(audit_json["reason"], "current");
     assert_eq!(audit_json["kind"], "conversion");
     assert_eq!(audit_json["status"], "succeeded");
@@ -328,6 +339,10 @@ fn inspect_asset_package_audits_single_package_without_request() {
     );
     let summary_json = parse_json(&summary.to_json_string());
     assert_eq!(summary_json["audit"]["usable"], true);
+    assert_eq!(
+        summary_json["contract_version"],
+        ASSET_PACKAGE_SUMMARY_CONTRACT_VERSION
+    );
     assert_eq!(summary_json["audit"]["reason"], "current");
     assert_eq!(summary_json["items"][0]["operation"], "converted");
     assert_eq!(
@@ -703,12 +718,20 @@ fn preflight_asset_returns_business_failure_without_writing_package() {
         Some(AssetFailureAction::ProvideReadableVisualization)
     );
     let preflight_json = parse_json(&result.to_json_string());
+    assert_eq!(
+        preflight_json["contract_version"],
+        ASSET_PREFLIGHT_CONTRACT_VERSION
+    );
     assert_eq!(preflight_json["decision"], "needs_readable_visualization");
     assert_eq!(
         preflight_json["failure"]["category"],
         "no_readable_lightweight_cache"
     );
     let status_json = parse_json(&business_status.to_json_string());
+    assert_eq!(
+        status_json["contract_version"],
+        ASSET_BUSINESS_STATUS_CONTRACT_VERSION
+    );
     assert_eq!(status_json["state"], "needs_action");
     assert_eq!(status_json["action"], "provide_readable_visualization");
 
@@ -753,6 +776,10 @@ fn preflight_batch_assets_returns_aggregate_business_decision_without_writing_pa
     assert_eq!(business_status.blocked_count, 1);
     let batch_preflight_json = parse_json(&result.to_json_string());
     assert_eq!(
+        batch_preflight_json["contract_version"],
+        BATCH_ASSET_PREFLIGHT_CONTRACT_VERSION
+    );
+    assert_eq!(
         batch_preflight_json["decision"],
         "needs_readable_visualization"
     );
@@ -770,6 +797,10 @@ fn preflight_batch_assets_returns_aggregate_business_decision_without_writing_pa
         2
     );
     let batch_status_json = parse_json(&business_status.to_json_string());
+    assert_eq!(
+        batch_status_json["contract_version"],
+        ASSET_BUSINESS_STATUS_CONTRACT_VERSION
+    );
     assert_eq!(batch_status_json["state"], "needs_action");
     assert_eq!(batch_status_json["ready_count"], 1);
     assert_eq!(batch_status_json["blocked_count"], 1);

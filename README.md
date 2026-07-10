@@ -305,8 +305,9 @@ The main embeddable operations are:
   package summary results: expose a unified `ready_to_convert`, `converted`,
   `preview_ready`, or `needs_action` state for UI and orchestration.
 - `to_json_string()` on preflight results, batch preflight results, package
-  audits, package summaries, and business statuses: returns stable pretty JSON
-  for API responses, logs, or host applications embedding the library.
+  audits, package summaries, and business statuses: returns stable
+  `contract_version`-tagged pretty JSON for API responses, logs, or host
+  applications embedding the library.
 - `detect_format` and `inspect_path`: probe, asset discovery, and optional real
   import validation.
 - `convert_path_to_glb`: single-file conversion with mesh cleanup, GLB
