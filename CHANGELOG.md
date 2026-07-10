@@ -11,3 +11,4 @@ All notable changes to Feather are tracked here.
 - Added STEP support for planar holes, analytic surface holes, torus patches, B-Spline/NURBS edge boundaries, and parameter `TRIMMED_CURVE` spans over supported curve bases.
 - Added CLI commands for inspect, convert, batch conversion, cache dumping, and machine-readable format capability reporting.
 - Added public JSON contracts, compatibility documentation, fixtures, and integration tests for conversion behavior.
+- Replaced triangle sampling LOD with deterministic meshoptimizer-based simplification, primitive-aware budget allocation, and explicit quality fallback warnings.

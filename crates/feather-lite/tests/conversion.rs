@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -277,12 +278,113 @@ fn mesh_triangle_budget_reduces_preview_geometry() {
 
     assert_eq!(document.metadata.triangle_count, 1);
     assert_eq!(document.meshes[0].primitives[0].indices.len(), 3);
+    assert!(document.metadata.warnings.iter().any(|warning| {
+        warning.contains("applied triangle budget LOD with topology-aware simplification")
+    }));
+}
+
+#[test]
+fn mesh_triangle_budget_preserves_a_connected_surface_and_exports_glb() {
+    let mut document = grid_lite_document(16, 16);
+    let mut repeated = document.clone();
+    let options = MeshOptions {
+        max_triangles: Some(96),
+        ..MeshOptions::default()
+    };
+
+    optimize_document(&mut document, &options);
+    optimize_document(&mut repeated, &options);
+    validate_document(&document).expect("simplified grid should remain valid");
+
+    assert_eq!(
+        document, repeated,
+        "mesh simplification must be deterministic"
+    );
+    assert!(document.triangle_count() <= 96);
+    assert!(document.triangle_count() > 0);
+    let primitive = &document.meshes[0].primitives[0];
+    assert_eq!(triangle_edge_component_count(&primitive.indices), 1);
+    assert_eq!(primitive.normals.len(), primitive.positions.len());
+    assert!(primitive.positions.len() < 17 * 17);
+
+    let glb = export_glb(&document, &GlbExportOptions::default())
+        .expect("simplified grid should export as GLB");
+    let validation = validate_glb_payload(&glb).expect("simplified GLB should validate");
+    assert_eq!(validation.triangle_count, document.triangle_count());
+}
+
+#[test]
+fn mesh_triangle_budget_keeps_small_material_primitives_visible() {
+    let mut document = grid_lite_document(12, 12);
+    document
+        .materials
+        .push(LiteMaterial::new("Accent", [0.9, 0.2, 0.1, 1.0]));
+    let mut accent = LitePrimitive::new(Some(1));
+    accent.positions = vec![[20.0, 0.0, 0.0], [21.0, 0.0, 0.0], [20.0, 1.0, 0.0]];
+    accent.normals = vec![[0.0, 0.0, 1.0]; 3];
+    accent.indices = vec![0, 1, 2];
+    document.meshes[0].primitives.push(accent);
+    document.meshes[0].recompute_bbox();
+    document.refresh_metadata();
+
+    optimize_document(
+        &mut document,
+        &MeshOptions {
+            max_triangles: Some(24),
+            ..MeshOptions::default()
+        },
+    );
+    validate_document(&document).expect("multi-material LOD should remain valid");
+
+    assert!(document.triangle_count() <= 24);
+    assert_eq!(document.meshes[0].primitives.len(), 2);
+    let accent = &document.meshes[0].primitives[1];
+    assert_eq!(accent.material, Some(1));
+    assert_eq!(accent.triangle_count(), 1);
+    assert_eq!(accent.positions.len(), 3);
+}
+
+#[test]
+fn mesh_triangle_budget_reports_primitive_drops_when_budget_is_scarce() {
+    let mut document = LiteDocument::new("Fixture", "scarce-budget-fixture");
+    let mut large = LitePrimitive::new(None);
+    large.positions = vec![
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [1.0, 1.0, 0.0],
+    ];
+    large.normals = vec![[0.0, 0.0, 1.0]; 4];
+    large.indices = vec![0, 1, 2, 1, 3, 2];
+    let mut small = LitePrimitive::new(None);
+    small.positions = vec![[10.0, 0.0, 0.0], [11.0, 0.0, 0.0], [10.0, 1.0, 0.0]];
+    small.normals = vec![[0.0, 0.0, 1.0]; 3];
+    small.indices = vec![0, 1, 2];
+    let mut mesh = LiteMesh::new("ScarceBudget");
+    mesh.primitives.push(large);
+    mesh.primitives.push(small);
+    mesh.recompute_bbox();
+    document.meshes.push(mesh);
+    document.nodes.push(LiteNode::new("ScarceBudget", Some(0)));
+    document.refresh_metadata();
+
+    optimize_document(
+        &mut document,
+        &MeshOptions {
+            max_triangles: Some(1),
+            ..MeshOptions::default()
+        },
+    );
+    validate_document(&document).expect("scarce-budget LOD should remain valid");
+
+    assert_eq!(document.triangle_count(), 1);
+    assert_eq!(document.meshes[0].primitives.len(), 1);
     assert!(
         document
             .metadata
             .warnings
             .iter()
-            .any(|warning| warning.contains("applied triangle budget LOD"))
+            .any(|warning| warning.contains("dropped 1 primitives"))
     );
 }
 
@@ -4514,6 +4616,98 @@ fn sample_lite_document() -> LiteDocument {
     document.nodes.push(LiteNode::new("Plate", Some(0)));
     document.refresh_metadata();
     document
+}
+
+fn grid_lite_document(columns: usize, rows: usize) -> LiteDocument {
+    let mut document = LiteDocument::new("Fixture", "grid-fixture");
+    document
+        .materials
+        .push(LiteMaterial::new("Default", [0.8, 0.8, 0.82, 1.0]));
+    let mut primitive = LitePrimitive::new(Some(0));
+    for row in 0..=rows {
+        for column in 0..=columns {
+            primitive.positions.push([column as f32, row as f32, 0.0]);
+            primitive.normals.push([0.0, 0.0, 1.0]);
+        }
+    }
+    let stride = columns + 1;
+    for row in 0..rows {
+        for column in 0..columns {
+            let lower_left = (row * stride + column) as u32;
+            let lower_right = lower_left + 1;
+            let upper_left = lower_left + stride as u32;
+            let upper_right = upper_left + 1;
+            primitive.indices.extend_from_slice(&[
+                lower_left,
+                lower_right,
+                upper_right,
+                lower_left,
+                upper_right,
+                upper_left,
+            ]);
+        }
+    }
+    let mut mesh = LiteMesh::new("Grid");
+    mesh.primitives.push(primitive);
+    mesh.recompute_bbox();
+    document.meshes.push(mesh);
+    document.nodes.push(LiteNode::new("Grid", Some(0)));
+    document.refresh_metadata();
+    document
+}
+
+fn triangle_edge_component_count(indices: &[u32]) -> usize {
+    let triangle_count = indices.len() / 3;
+    if triangle_count == 0 {
+        return 0;
+    }
+
+    let mut edge_owners = HashMap::<(u32, u32), Vec<usize>>::new();
+    for (triangle_index, triangle) in indices.chunks_exact(3).enumerate() {
+        for (left, right) in [
+            (triangle[0], triangle[1]),
+            (triangle[1], triangle[2]),
+            (triangle[2], triangle[0]),
+        ] {
+            let edge = if left < right {
+                (left, right)
+            } else {
+                (right, left)
+            };
+            edge_owners.entry(edge).or_default().push(triangle_index);
+        }
+    }
+
+    let mut adjacency = vec![Vec::new(); triangle_count];
+    for owners in edge_owners.values() {
+        for &left in owners {
+            for &right in owners {
+                if left != right {
+                    adjacency[left].push(right);
+                }
+            }
+        }
+    }
+
+    let mut visited = vec![false; triangle_count];
+    let mut components = 0;
+    for start in 0..triangle_count {
+        if visited[start] {
+            continue;
+        }
+        components += 1;
+        visited[start] = true;
+        let mut stack = vec![start];
+        while let Some(triangle) = stack.pop() {
+            for &neighbor in &adjacency[triangle] {
+                if !visited[neighbor] {
+                    visited[neighbor] = true;
+                    stack.push(neighbor);
+                }
+            }
+        }
+    }
+    components
 }
 
 fn large_index_lite_document() -> LiteDocument {

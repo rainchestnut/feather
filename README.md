@@ -29,7 +29,7 @@ The supported conversion path is:
 CATPart / CATProduct / CGR / 3DXML / NX PRT / SLDPRT / SLDASM / JT / ACIS / IGES / PRIVATE_CAD / Feather Lite cache / STEP / STL / OBJ / GLB
         -> visualization cache, standalone Feather Lite cache, cache-declared external references, OLE regular/mini streams, embedded STL/OBJ/glTF(BIN/data URI)/GLB, 3DXML or generic ZIP XML assembly manifests, stored/deflated ZIP entries with ZIP64 metadata, or native open-source tessellation
         -> Feather Lite IR
-        -> mesh cleaning / coordinate quantization / triangle-budget LOD
+        -> mesh cleaning / coordinate quantization / topology-aware triangle-budget LOD
         -> GLB + metadata.json
 ```
 
@@ -103,8 +103,12 @@ lightweight payloads.
 OBJ payloads preserve `usemtl` groups, and ZIP-packaged OBJ previews can apply
 simple MTL colors from sibling `.mtl` entries.
 Conversion can apply deterministic coordinate quantization through
-`--quantize <grid-step>` and triangle-budget LOD through `--max-triangles` or
-the coarse `--lod low|medium|high|none` presets for large visual previews.
+`--quantize <grid-step>` and topology-aware triangle-budget LOD through
+`--max-triangles` or the coarse `--lod low|medium|high|none` presets for large
+visual previews. LOD uses the open-source meshoptimizer simplifier, preserves
+non-empty material primitives whenever the budget permits, compacts unused
+vertices, and emits metadata warnings whenever satisfying a hard budget
+requires topology-relaxed simplification or dropping whole primitives.
 STEP curve tessellation accepts `--chord-error <source-unit-value>`; zero in
 the core API uses a curve-size-relative default. `--max-step-curve-segments`
 bounds work for each curve edge, and the B-spline path is additionally bounded
@@ -284,7 +288,9 @@ The main embeddable operations are:
 - `asset_conversion_identity` and `batch_asset_conversion_identity`: compute the
   same stable `asset_id`, source hash, source byte size, and settings
   fingerprint that conversion and reuse checks will use, without running mesh
-  export.
+  export. The fingerprint includes a conversion-engine revision so an
+  output-affecting implementation upgrade invalidates packages produced by old
+  conversion logic even when caller settings are unchanged.
 - `is_asset_package_current`, `is_batch_asset_package_current`,
   `explain_asset_package_freshness`, and
   `explain_batch_asset_package_freshness`: validate that business asset
@@ -472,7 +478,7 @@ inputs are expanded to the actual supported file set before identity and
 freshness checks are computed. Both package metadata files include a
 deterministic `asset_id`, source SHA-256, source byte size, and settings
 fingerprint so callers can decide whether a package still matches the current
-source, conversion profile, and batch mode.
+source, conversion profile, batch mode, and conversion-engine revision.
 Successful asset results also expose `quality`, a business-level
 `AssetQualityReport`. `preview_status` is `ready`, `no_visual_geometry`,
 `no_preview_output`, or `partial_failure`; `quality_level` is `empty`, `light`,

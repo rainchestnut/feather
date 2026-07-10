@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use crate::document::{LiteDocument, LitePrimitive};
+use crate::mesh::simplify::apply_triangle_budget;
 use crate::mesh::validate::is_degenerate_triangle;
 
 /// Options for deterministic mesh cleanup.
@@ -64,7 +65,26 @@ pub fn optimize_document(document: &mut LiteDocument, options: &MeshOptions) {
         ));
         prune_empty_geometry(document);
     }
-    apply_triangle_budget(document, options.max_triangles);
+    if let Some(summary) = apply_triangle_budget(document, options.max_triangles) {
+        prune_empty_geometry(document);
+        let reduced_triangles = document.triangle_count();
+        document.metadata.warnings.push(format!(
+            "applied triangle budget LOD with topology-aware simplification: reduced triangles from {} to {reduced_triangles}",
+            summary.original_triangles
+        ));
+        if summary.dropped_primitives > 0 {
+            document.metadata.warnings.push(format!(
+                "triangle budget was smaller than the non-empty primitive count; dropped {} primitives after deterministic triangle-count ranking",
+                summary.dropped_primitives
+            ));
+        }
+        if summary.topology_relaxed_primitives > 0 {
+            document.metadata.warnings.push(format!(
+                "used topology-relaxed mesh simplification for {} primitives to satisfy the hard triangle budget",
+                summary.topology_relaxed_primitives
+            ));
+        }
+    }
     for mesh in &mut document.meshes {
         mesh.recompute_bbox();
     }
@@ -190,141 +210,6 @@ fn remove_degenerate_triangles(primitive: &mut LitePrimitive) -> u64 {
     removed
 }
 
-fn apply_triangle_budget(document: &mut LiteDocument, max_triangles: Option<u64>) {
-    let Some(max_triangles) = max_triangles else {
-        return;
-    };
-    let current_triangles = document.triangle_count();
-    if max_triangles == 0 || current_triangles <= max_triangles {
-        return;
-    }
-
-    let paths = primitive_triangle_paths(document);
-    if paths.is_empty() {
-        return;
-    }
-
-    let budgets = allocate_triangle_budget(&paths, current_triangles, max_triangles);
-    for (path, budget) in paths.into_iter().zip(budgets) {
-        let primitive = &mut document.meshes[path.mesh_index].primitives[path.primitive_index];
-        simplify_primitive_to_triangle_count(primitive, budget as usize);
-    }
-
-    prune_empty_geometry(document);
-    let reduced_triangles = document.triangle_count();
-    document.metadata.warnings.push(format!(
-        "applied triangle budget LOD: reduced triangles from {current_triangles} to {reduced_triangles}"
-    ));
-}
-
-#[derive(Debug, Clone, Copy)]
-struct PrimitiveTrianglePath {
-    mesh_index: usize,
-    primitive_index: usize,
-    triangles: u64,
-}
-
-fn primitive_triangle_paths(document: &LiteDocument) -> Vec<PrimitiveTrianglePath> {
-    let mut paths = Vec::new();
-    for (mesh_index, mesh) in document.meshes.iter().enumerate() {
-        for (primitive_index, primitive) in mesh.primitives.iter().enumerate() {
-            let triangles = primitive.triangle_count();
-            if triangles > 0 {
-                paths.push(PrimitiveTrianglePath {
-                    mesh_index,
-                    primitive_index,
-                    triangles,
-                });
-            }
-        }
-    }
-    paths
-}
-
-fn allocate_triangle_budget(
-    paths: &[PrimitiveTrianglePath],
-    total_triangles: u64,
-    max_triangles: u64,
-) -> Vec<u64> {
-    let target = max_triangles.min(total_triangles);
-    let mut budgets = Vec::with_capacity(paths.len());
-    let mut remainders = Vec::with_capacity(paths.len());
-    let mut allocated = 0_u64;
-
-    for (index, path) in paths.iter().enumerate() {
-        let scaled = u128::from(path.triangles) * u128::from(target);
-        let budget = (scaled / u128::from(total_triangles)) as u64;
-        let remainder = (scaled % u128::from(total_triangles)) as u64;
-        budgets.push(budget);
-        remainders.push((index, remainder, path.triangles));
-        allocated += budget;
-    }
-
-    remainders.sort_by(|left, right| {
-        right
-            .1
-            .cmp(&left.1)
-            .then_with(|| right.2.cmp(&left.2))
-            .then_with(|| left.0.cmp(&right.0))
-    });
-
-    for (index, _, _) in remainders {
-        if allocated >= target {
-            break;
-        }
-        budgets[index] += 1;
-        allocated += 1;
-    }
-
-    budgets
-}
-
-fn simplify_primitive_to_triangle_count(primitive: &mut LitePrimitive, target_triangles: usize) {
-    let total_triangles = primitive.triangle_count() as usize;
-    if target_triangles >= total_triangles {
-        return;
-    }
-    if target_triangles == 0 {
-        primitive.positions.clear();
-        primitive.normals.clear();
-        primitive.indices.clear();
-        return;
-    }
-
-    let old_positions = primitive.positions.clone();
-    let old_normals = primitive.normals.clone();
-    let old_indices = primitive.indices.clone();
-    let selected_triangles = evenly_spaced_triangle_indices(total_triangles, target_triangles);
-    let has_normals = old_normals.len() == old_positions.len();
-    let mut remap = HashMap::<u32, u32>::new();
-    let mut positions = Vec::new();
-    let mut normals = Vec::new();
-    let mut indices = Vec::with_capacity(target_triangles * 3);
-
-    for triangle_index in selected_triangles {
-        let start = triangle_index * 3;
-        for old_index in &old_indices[start..start + 3] {
-            let new_index = if let Some(existing) = remap.get(old_index) {
-                *existing
-            } else {
-                let old_position_index = *old_index as usize;
-                let new_index = positions.len() as u32;
-                positions.push(old_positions[old_position_index]);
-                if has_normals {
-                    normals.push(old_normals[old_position_index]);
-                }
-                remap.insert(*old_index, new_index);
-                new_index
-            };
-            indices.push(new_index);
-        }
-    }
-
-    primitive.positions = positions;
-    primitive.normals = normals;
-    primitive.indices = indices;
-}
-
 fn quantize_primitive_positions(primitive: &mut LitePrimitive, step: f32) {
     for position in &mut primitive.positions {
         *position = [
@@ -349,29 +234,6 @@ fn format_step(step: f32) -> String {
     } else {
         "0.0".to_string()
     }
-}
-
-fn evenly_spaced_triangle_indices(total_triangles: usize, target_triangles: usize) -> Vec<usize> {
-    let mut selected = Vec::with_capacity(target_triangles);
-    let mut last = None;
-    for index in 0..target_triangles {
-        let candidate = index * total_triangles / target_triangles;
-        if last == Some(candidate) {
-            continue;
-        }
-        selected.push(candidate);
-        last = Some(candidate);
-    }
-
-    let mut candidate = 0;
-    while selected.len() < target_triangles {
-        if !selected.contains(&candidate) {
-            selected.push(candidate);
-        }
-        candidate += 1;
-    }
-    selected.sort_unstable();
-    selected
 }
 
 fn prune_empty_geometry(document: &mut LiteDocument) {

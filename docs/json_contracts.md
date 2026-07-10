@@ -281,8 +281,9 @@ Required fields in `source-info.json`:
 - `asset_id`: deterministic identifier derived from source hash and settings
 - `source_sha256`: SHA-256 for one source, or aggregate SHA-256 for a batch
 - `source_size_bytes`: source byte size, or total source byte size for a batch
-- `settings_fingerprint`: SHA-256 of profile plus concrete conversion settings;
-  batch packages also include conversion vs check-only mode
+- `settings_fingerprint`: SHA-256 of conversion-engine revision, profile, and
+  concrete conversion settings; batch packages also include conversion vs
+  check-only mode
 - `inputs`: array of source path, source SHA-256, and source byte size objects
 - `created_at_unix_ms`: integer
 
@@ -294,7 +295,8 @@ Required fields in single conversion `diagnostics.json`:
 - `asset_id`: deterministic identifier derived from source hash and settings
 - `source_sha256`: SHA-256 for the source
 - `source_size_bytes`: source byte size
-- `settings_fingerprint`: SHA-256 of profile plus concrete conversion settings
+- `settings_fingerprint`: SHA-256 of conversion-engine revision, profile, and
+  concrete conversion settings
 - `source_format`: converted format label or `null`
 - `node_count`, `mesh_count`, `primitive_count`, `vertex_count`,
   `triangle_count`: quality counts or `null`
@@ -315,8 +317,8 @@ Required fields in batch `diagnostics.json`:
 - `asset_id`: deterministic identifier derived from source hashes and settings
 - `source_sha256`: aggregate source SHA-256
 - `source_size_bytes`: total source byte size
-- `settings_fingerprint`: SHA-256 of profile plus concrete conversion settings
-  and conversion vs check-only mode
+- `settings_fingerprint`: SHA-256 of conversion-engine revision, profile,
+  concrete conversion settings, and conversion vs check-only mode
 - `input_count`, `converted_count`, `reused_count`, `checked_count`,
   `failed_count`: integers
 - `quality`: business quality object for succeeded batch conversions or checks,

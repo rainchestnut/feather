@@ -174,6 +174,12 @@ fn asset_conversion_identity_matches_conversion_and_effective_settings() {
     let planned = asset_conversion_identity(&request).expect("identity should be computable");
     let repeated = asset_conversion_identity(&request).expect("identity should be stable");
     assert_eq!(planned, repeated);
+    // Output-affecting engine changes must update the revision and this golden
+    // fingerprint together instead of silently reusing old asset packages.
+    assert_eq!(
+        planned.settings_fingerprint,
+        "5c0ec0d1910710ecfbff70fae10aabe4ae4677463e1235782c9df8b4fdfc6bd3"
+    );
 
     let converted = convert_asset(&request).expect("asset conversion should succeed");
     assert_eq!(planned.asset_id, converted.asset_id);

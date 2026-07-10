@@ -33,6 +33,9 @@ use crate::pipeline::{ConversionError, ConversionSummary, convert_path_to_glb};
 const LIGHT_TRIANGLE_LIMIT: u64 = 50_000;
 const MEDIUM_TRIANGLE_LIMIT: u64 = 150_000;
 const HEAVY_TRIANGLE_LIMIT: u64 = 500_000;
+// Bump this whenever conversion output can change without a settings change,
+// so persisted asset packages cannot silently reuse artifacts from old logic.
+const CONVERSION_ENGINE_REVISION: &str = "feather.conversion-engine.v1";
 
 /// Business profile used to select conversion quality without exposing low-level knobs.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -3212,6 +3215,8 @@ fn conversion_settings_fingerprint(
 ) -> String {
     let mut hasher = Sha256::new();
     hasher.update(ASSET_PACKAGE_CONTRACT_VERSION.as_bytes());
+    hasher.update(b"\0engine-revision\0");
+    hasher.update(CONVERSION_ENGINE_REVISION.as_bytes());
     hasher.update(b"\0profile\0");
     hasher.update(profile.as_bytes());
     hasher.update(b"\0settings\0");
